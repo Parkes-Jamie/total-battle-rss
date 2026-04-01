@@ -70,9 +70,22 @@ function Scanner({ players, weekId, onComplete }) {
     if (!file) return;
     setImage(URL.createObjectURL(file));
     setScanned(null); setError(null); setNewPlayers([]);
-    const reader = new FileReader();
-    reader.onload = e => setImageData({ base64: e.target.result.split(',')[1], mediaType: file.type || 'image/jpeg' });
-    reader.readAsDataURL(file);
+    // Compress image to stay under 5MB API limit
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const maxDim = 1200;
+      let w = img.width, h = img.height;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
+        else { w = Math.round(w * maxDim / h); h = maxDim; }
+      }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      setImageData({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
+    };
+    img.src = URL.createObjectURL(file);
   };
 
   const scan = async () => {
