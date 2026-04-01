@@ -267,11 +267,18 @@ function App() {
     await supabase.from('submissions').upsert({ week_id: weekId, data: next }, { onConflict: 'week_id' });
   };
 
-  const processed = useMemo(() => players.map(p => ({ ...p, status: getStatus(p.totals), worst: Math.min(...RES.map(r => p.totals[r] || 0)) })), [players]);
+  const processed = useMemo(() => players.map(p => ({
+    ...p, status: getStatus(p.totals),
+    worst: Math.min(...RES.map(r => p.totals[r] || 0)),
+    total: RES.reduce((sum, r) => sum + (p.totals[r] || 0), 0),
+  })), [players]);
 
   const filtered = useMemo(() => {
     let list = filter === 'All' ? [...processed] : processed.filter(p => p.status === filter);
-    return sort === 'rank' ? list.sort((a, b) => rankIdx(a.rank) - rankIdx(b.rank) || a.name.localeCompare(b.name)) : list.sort((a, b) => a.worst - b.worst);
+    if (sort === 'rank') return list.sort((a, b) => rankIdx(a.rank) - rankIdx(b.rank) || a.name.localeCompare(b.name));
+    if (sort === 'most') return list.sort((a, b) => b.total - a.total);
+    if (sort === 'least') return list.sort((a, b) => a.total - b.total);
+    return list.sort((a, b) => a.worst - b.worst);
   }, [processed, filter, sort]);
 
   const summary = useMemo(() => { const c = { Done: 0, 'On Track': 0, Slow: 0, Behind: 0 }; processed.forEach(p => c[p.status]++); return c; }, [processed]);
@@ -308,14 +315,32 @@ function App() {
     setSubmitted(emptyS()); await loadData(); setSaving(false); closeModal();
   };
 
+  const [reportType, setReportType] = useState('full');
+
   const report = useMemo(() => {
+    const totalFor = p => RES.reduce((s, r) => s + (p.totals[r] || 0), 0);
+    if (reportType === 'zero') {
+      const zero = processed.filter(p => totalFor(p) === 0).sort((a, b) => rankIdx(a.rank) - rankIdx(b.rank));
+      return [`ZERO CONTRIBUTORS — ${week}`, `${zero.length} players have sent nothing this week.`, '', ...zero.map(p => `${p.name} (${p.rank})`)].join('\n');
+    }
+    if (reportType === 'under') {
+      const under = processed.filter(p => totalFor(p) > 0 && p.status !== 'Done').sort((a, b) => rankIdx(a.rank) - rankIdx(b.rank));
+      return [`UNDER TARGET — ${week}`, `${under.length} players contributing but not hitting targets.`, '', ...under.map(p => {
+        const shorts = RES.filter(r => (p.totals[r] || 0) < TARGET).map(r => `${r}: ${((TARGET - (p.totals[r] || 0)) / 1000).toFixed(1)}k short`);
+        return `${p.name} (${p.rank}): ${shorts.join(', ')}`;
+      })].join('\n');
+    }
+    if (reportType === 'top5') {
+      const top = [...processed].sort((a, b) => totalFor(b) - totalFor(a)).slice(0, 5);
+      return [`TOP 5 CONTRIBUTORS — ${week}`, '', ...top.map((p, i) => `${i + 1}. ${p.name} (${p.rank}) — ${(totalFor(p) / 1000000).toFixed(2)}M total`)].join('\n');
+    }
     const done = processed.filter(p => p.status === 'Done').map(p => p.name);
     const out = processed.filter(p => p.status !== 'Done').sort((a, b) => rankIdx(a.rank) - rankIdx(b.rank)).map(p => {
       const s = RES.filter(r => (p.totals[r] || 0) < TARGET).map(r => `${r}: ${((TARGET - (p.totals[r] || 0)) / 1000).toFixed(1)}k short`);
       return `${p.name} (${p.rank}): ${s.join(', ')}`;
     });
     return [`WEEKLY RSS REPORT — ${week}`, '', `COMPLETED (${done.length}):`, done.length ? done.join(', ') : 'None', '', `OUTSTANDING (${out.length}):`, ...out].join('\n');
-  }, [processed, week]);
+  }, [processed, week, reportType]);
 
   const copyReport = () => { navigator.clipboard.writeText(report); setCopied(true); setTimeout(() => setCopied(false), 2000); };
   const todayDone = RES.filter(r => submitted[DAYS[today]]?.[r]).length;
@@ -381,7 +406,7 @@ function App() {
           <button key={f} onClick={() => setFilter(f)} style={btn(filter === f ? 'active' : 'default')}>{f}</button>
         ))}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-          <button onClick={() => setSort(s => s === 'rank' ? 'worst' : 'rank')} style={btn()}>Sort: {sort === 'rank' ? 'Rank' : 'Worst'}</button>
+          <button onClick={() => setSort(s => s === 'rank' ? 'most' : s === 'most' ? 'least' : 'rank')} style={btn()}>Sort: {sort === 'rank' ? 'Rank' : sort === 'most' ? 'Most' : 'Least'}</button>
           {admin && <button onClick={() => setShowScanner(s => !s)} style={btn(showScanner ? 'active' : 'default')}>📷 Scan</button>}
           {admin && <button onClick={() => setModal('add')} style={btn()}>+ Player</button>}
           {admin && <button onClick={() => setModal('report')} style={btn()}>Report</button>}
@@ -467,8 +492,13 @@ function App() {
             </>}
 
             {modal === 'report' && <>
-              <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 16, fontWeight: 700 }}>Weekly Report</div>
-              <pre style={{ background: '#1a1b22', border: '1px solid #484858', borderRadius: 3, padding: 12, fontSize: 10, lineHeight: 1.8, color: '#d4b878', whiteSpace: 'pre-wrap', overflowY: 'auto', maxHeight: 340, fontFamily: 'inherit', marginBottom: 14 }}>{report}</pre>
+              <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 12, fontWeight: 700 }}>Reports</div>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+                {[['full','Full Report'],['zero','Zero Contrib'],['under','Under Target'],['top5','Top 5']].map(([t,l]) => (
+                  <button key={t} onClick={() => setReportType(t)} style={{ ...btn(reportType === t ? 'active' : 'default'), fontSize: 9, padding: '4px 10px' }}>{l}</button>
+                ))}
+              </div>
+              <pre style={{ background: '#1a1b22', border: '1px solid #484858', borderRadius: 3, padding: 12, fontSize: 10, lineHeight: 1.8, color: '#d4b878', whiteSpace: 'pre-wrap', overflowY: 'auto', maxHeight: 300, fontFamily: 'inherit', marginBottom: 14 }}>{report}</pre>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button onClick={closeModal} style={btn()}>Close</button>
                 <button onClick={copyReport} style={btn('primary')}>{copied ? 'Copied!' : 'Copy'}</button>
