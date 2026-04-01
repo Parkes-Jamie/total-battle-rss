@@ -61,10 +61,10 @@ const isAdmin = () => window.location.pathname === '/admin';
 // ── Global styles ─────────────────────────────────────────────────────────────
 const GLOBAL_CSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #14151e; color: #f0e8d8; font-family: 'Courier New', monospace; }
+  body { background: #0d0e10; color: #d4c9b8; font-family: 'Courier New', monospace; }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: #111; }
-  ::-webkit-scrollbar-thumb { background: #7a6a30; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb { background: #3a3020; border-radius: 3px; }
   input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
 `;
 
@@ -191,30 +191,30 @@ function App() {
   const btn = (variant = 'default') => ({
     borderRadius: 3, padding: '5px 12px', fontSize: 10, fontFamily: 'inherit',
     letterSpacing: '.08em', cursor: 'pointer', textTransform: 'uppercase', border: '1px solid', transition: 'all .15s',
-    ...(variant === 'active'   ? { background: '#e8a020', color: '#14151e', borderColor: '#e8a020' } :
-        variant === 'primary'  ? { background: '#e8a020', color: '#14151e', borderColor: '#e8a020', fontWeight: 700 } :
+    ...(variant === 'active'   ? { background: '#e8a020', color: '#1a1b22', borderColor: '#e8a020' } :
+        variant === 'primary'  ? { background: '#e8a020', color: '#1a1b22', borderColor: '#e8a020', fontWeight: 700 } :
         variant === 'danger'   ? { background: '#2a0a0a', color: '#f87171', borderColor: '#7f1d1d' } :
-                                 { background: '#242530', color: '#c0a860', borderColor: '#3e3f4e' }),
+                                 { background: '#2a2b36', color: '#d4b870', borderColor: '#484858' }),
   });
-  const inp = (col) => ({ width: '100%', background: '#14151e', border: '1px solid #3e3f4e', borderRadius: 3, padding: '7px 9px', color: col || '#f0e8d8', fontFamily: 'inherit', fontSize: 12, boxSizing: 'border-box' });
+  const inp = (col) => ({ width: '100%', background: '#1a1b22', border: '1px solid #2a2a30', borderRadius: 3, padding: '7px 9px', color: col || '#f5f0e8', fontFamily: 'inherit', fontSize: 12, boxSizing: 'border-box' });
 
   if (loading) return (
-    <div style={{ minHeight: '100vh', background: '#14151e', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#e8a020', fontFamily: 'Courier New', letterSpacing: '.1em', fontSize: 13 }}>
+    <div style={{ minHeight: '100vh', background: '#1a1b22', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#e8a020', fontFamily: 'Courier New', letterSpacing: '.1em', fontSize: 13 }}>
       LOADING...
     </div>
   );
 
   return (
-    <div style={{ minHeight: '100vh', background: '#14151e', color: '#f0e8d8', fontFamily: "'Courier New',monospace", fontSize: 13, paddingBottom: 40 }}>
+    <div style={{ minHeight: '100vh', background: '#1a1b22', color: '#f5f0e8', fontFamily: "'Courier New',monospace", fontSize: 13, paddingBottom: 40 }}>
       <style>{GLOBAL_CSS}</style>
 
       {/* Header */}
-      <div style={{ background: 'linear-gradient(180deg,#1a1200,#14151e)', borderBottom: '1px solid #e8a02028', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50 }}>
+      <div style={{ background: 'linear-gradient(180deg,#1a1200,#0d0e10)', borderBottom: '1px solid #e8a02028', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: '#e8a020' }}>
             ⚔ RSS Tracker {admin && <span style={{ fontSize: 10, color: '#ef4444', letterSpacing: '.1em' }}>ADMIN</span>}
           </div>
-          <div style={{ fontSize: 9, color: '#9a8040', letterSpacing: '.1em', marginTop: 2 }}>TOTAL BATTLE · CLAN COMMAND</div>
+          <div style={{ fontSize: 9, color: '#c8a850', letterSpacing: '.1em', marginTop: 2 }}>TOTAL BATTLE · CLAN COMMAND</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {admin && todayDone < RES.length && (
@@ -222,17 +222,17 @@ function App() {
               {RES.length - todayDone} PENDING TODAY
             </div>
           )}
-          {!admin && <div style={{ fontSize: 9, color: '#8a7030', letterSpacing: '.06em' }}>READ ONLY</div>}
+          {!admin && <div style={{ fontSize: 9, color: '#b89840', letterSpacing: '.06em' }}>READ ONLY</div>}
           <div style={{ background: '#1a1200', border: '1px solid #e8a02050', borderRadius: 4, padding: '3px 10px', fontSize: 10, color: '#e8a020', letterSpacing: '.06em' }}>{week}</div>
         </div>
       </div>
 
       {/* Day strip */}
-      <div style={{ background: '#16171f', borderBottom: '1px solid #1e1e22', padding: '10px 18px' }}>
+      <div style={{ background: '#1e1f28', borderBottom: '1px solid #1e1e22', padding: '10px 18px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '80px repeat(7, 1fr)', gap: 4, marginBottom: 6 }}>
-          <div style={{ fontSize: 9, color: '#8a7030', letterSpacing: '.08em', textTransform: 'uppercase', alignSelf: 'center' }}>Resource</div>
+          <div style={{ fontSize: 9, color: '#b89840', letterSpacing: '.08em', textTransform: 'uppercase', alignSelf: 'center' }}>Resource</div>
           {DAYS.map((d, i) => (
-            <div key={d} style={{ textAlign: 'center', fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: i === today ? '#e8a020' : i < today ? '#aa9050' : '#3e3f4e', fontWeight: i === today ? 700 : 400 }}>
+            <div key={d} style={{ textAlign: 'center', fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: i === today ? '#e8a020' : i < today ? '#c8a855' : '#484858', fontWeight: i === today ? 700 : 400 }}>
               {d}{i === today && <div style={{ width: 4, height: 4, borderRadius: '50%', background: '#e8a020', margin: '2px auto 0' }} />}
             </div>
           ))}
@@ -245,7 +245,7 @@ function App() {
               const isFuture = i > today;
               return (
                 <div key={d} onClick={() => admin && !isFuture && toggleSubmit(d, r)}
-                  style={{ height: 22, borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, cursor: admin && !isFuture ? 'pointer' : 'default', transition: 'all .15s', background: done ? RES_COL[r] + '30' : isFuture ? '#14151e' : '#242530', border: `1px solid ${done ? RES_COL[r] + '80' : i === today ? '#7a6a30' : '#1e1e22'}`, opacity: isFuture ? 0.2 : 1 }}>
+                  style={{ height: 22, borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, cursor: admin && !isFuture ? 'pointer' : 'default', transition: 'all .15s', background: done ? RES_COL[r] + '30' : isFuture ? '#1a1b22' : '#2a2b36', border: `1px solid ${done ? RES_COL[r] + '80' : i === today ? '#8a7840' : '#1e1e22'}`, opacity: isFuture ? 0.2 : 1 }}>
                   {done ? '✓' : i < today && !done ? '✗' : '·'}
                 </div>
               );
@@ -255,17 +255,17 @@ function App() {
       </div>
 
       {/* Summary */}
-      <div style={{ display: 'flex', gap: 8, padding: '8px 18px', background: '#1a1b22', borderBottom: '1px solid #242530', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 8, padding: '8px 18px', background: '#22232c', borderBottom: '1px solid #1a1a1e', flexWrap: 'wrap', alignItems: 'center' }}>
         {Object.entries(summary).map(([s, n]) => (
           <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 5, background: STAT_COL[s] + '18', border: `1px solid ${STAT_COL[s]}40`, borderRadius: 3, padding: '3px 9px', fontSize: 10, color: STAT_COL[s], letterSpacing: '.06em' }}>
             <strong>{n}</strong> {s.toUpperCase()}
           </div>
         ))}
-        <span style={{ marginLeft: 'auto', fontSize: 9, color: '#8a7030', letterSpacing: '.06em' }}>{players.length} PLAYERS</span>
+        <span style={{ marginLeft: 'auto', fontSize: 9, color: '#b89840', letterSpacing: '.06em' }}>{players.length} PLAYERS</span>
       </div>
 
       {/* Controls */}
-      <div style={{ display: 'flex', gap: 6, padding: '8px 18px', flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid #1e1f28' }}>
+      <div style={{ display: 'flex', gap: 6, padding: '8px 18px', flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid #16161a' }}>
         {['All', 'Done', 'On Track', 'Slow', 'Behind'].map(f => (
           <button key={f} onClick={() => setFilter(f)} style={btn(filter === f ? 'active' : 'default')}>{f}</button>
         ))}
@@ -283,18 +283,18 @@ function App() {
           <thead>
             <tr style={{ borderBottom: '1px solid #1e1e22' }}>
               <th style={{ width: 6 }} />
-              <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: 9, letterSpacing: '.1em', textTransform: 'uppercase', color: '#8a7030', fontWeight: 400 }}>Player</th>
-              <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: 9, letterSpacing: '.1em', textTransform: 'uppercase', color: '#8a7030', fontWeight: 400, width: 82 }}>Status</th>
-              {RES.map(r => <th key={r} style={{ textAlign: 'right', padding: '6px 8px', fontSize: 9, letterSpacing: '.08em', textTransform: 'uppercase', color: '#8a7030', fontWeight: 400, width: 76 }}>{RES_ICON[r]} {r}</th>)}
+              <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: 9, letterSpacing: '.1em', textTransform: 'uppercase', color: '#b89840', fontWeight: 400 }}>Player</th>
+              <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: 9, letterSpacing: '.1em', textTransform: 'uppercase', color: '#b89840', fontWeight: 400, width: 82 }}>Status</th>
+              {RES.map(r => <th key={r} style={{ textAlign: 'right', padding: '6px 8px', fontSize: 9, letterSpacing: '.08em', textTransform: 'uppercase', color: '#b89840', fontWeight: 400, width: 76 }}>{RES_ICON[r]} {r}</th>)}
               {admin && <th style={{ width: 58 }} />}
             </tr>
           </thead>
           <tbody>
             {filtered.map((p, i) => (
-              <tr key={p.id} style={{ background: i % 2 === 0 ? '#14151e' : '#1a1b22', borderBottom: '1px solid #20212a' }}>
+              <tr key={p.id} style={{ background: i % 2 === 0 ? '#1a1b22' : '#22232c', borderBottom: '1px solid #14151a' }}>
                 <td style={{ padding: '5px 0 5px 8px' }}><div style={{ width: 3, height: 30, borderRadius: 2, background: RANK_COL[p.rank], opacity: .75 }} /></td>
                 <td style={{ padding: '5px 8px' }}>
-                  <div style={{ fontSize: 12, color: '#f0e8d8' }}>{p.name}</div>
+                  <div style={{ fontSize: 12, color: '#f5f0e8' }}>{p.name}</div>
                   <div style={{ fontSize: 9, color: RANK_COL[p.rank], letterSpacing: '.08em', textTransform: 'uppercase', marginTop: 1, opacity: .85 }}>{p.rank}</div>
                 </td>
                 <td style={{ padding: '5px 8px' }}>
@@ -310,8 +310,8 @@ function App() {
                 ))}
                 {admin && (
                   <td style={{ padding: '5px 8px' }}>
-                    <span onClick={() => openEdit(p)} style={{ fontSize: 9, color: '#aa9050', cursor: 'pointer', letterSpacing: '.06em', textTransform: 'uppercase', marginRight: 8 }} onMouseOver={e => e.target.style.color = '#e8a020'} onMouseOut={e => e.target.style.color = '#aa9050'}>Edit</span>
-                    <span onClick={() => removePlayer(p.id)} style={{ fontSize: 9, color: '#3a1a1a', cursor: 'pointer' }} onMouseOver={e => e.target.style.color = '#ef4444'} onMouseOut={e => e.target.style.color = '#3a1a1a'}>✕</span>
+                    <span onClick={() => openEdit(p)} style={{ fontSize: 9, color: '#c8a855', cursor: 'pointer', letterSpacing: '.06em', textTransform: 'uppercase', marginRight: 8 }} onMouseOver={e => e.target.style.color = '#e8a020'} onMouseOut={e => e.target.style.color = '#c8a855'}>Edit</span>
+                    <span onClick={() => removePlayer(p.id)} style={{ fontSize: 9, color: '#884444', cursor: 'pointer' }} onMouseOver={e => e.target.style.color = '#ef4444'} onMouseOut={e => e.target.style.color = '#884444'}>✕</span>
                   </td>
                 )}
               </tr>
@@ -323,13 +323,13 @@ function App() {
       {/* Modals */}
       {modal && (
         <div onClick={closeModal} style={{ position: 'fixed', inset: 0, background: '#000d', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: '#16171a', border: `1px solid ${modal === 'reset' ? '#991b1b' : '#e8a02040'}`, borderRadius: 6, padding: 26, width: 'min(380px,92vw)', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#24252f', border: `1px solid ${modal === 'reset' ? '#991b1b' : '#e8a02040'}`, borderRadius: 6, padding: 26, width: 'min(380px,92vw)', maxHeight: '90vh', overflowY: 'auto' }}>
 
             {modal === 'add' && <>
               <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 16, fontWeight: 700 }}>Add Player</div>
-              <div style={{ fontSize: 9, color: '#aa9050', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4 }}>Name</div>
+              <div style={{ fontSize: 9, color: '#c8a855', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4 }}>Name</div>
               <input autoFocus style={inp()} value={newP.name} onChange={e => setNewP(p => ({ ...p, name: e.target.value }))} onKeyDown={e => e.key === 'Enter' && addPlayer()} placeholder="Player name..." />
-              <div style={{ fontSize: 9, color: '#aa9050', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4, marginTop: 8 }}>Rank</div>
+              <div style={{ fontSize: 9, color: '#c8a855', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4, marginTop: 8 }}>Rank</div>
               <select style={inp()} value={newP.rank} onChange={e => setNewP(p => ({ ...p, rank: e.target.value }))}>
                 {RANKS.map(r => <option key={r}>{r}</option>)}
               </select>
@@ -341,10 +341,10 @@ function App() {
 
             {modal === 'edit' && editPlayer && <>
               <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 6, fontWeight: 700 }}>Edit — {editPlayer.name}</div>
-              <div style={{ fontSize: 9, color: '#8a7030', letterSpacing: '.06em', marginBottom: 14 }}>RUNNING WEEKLY TOTALS</div>
+              <div style={{ fontSize: 9, color: '#b89840', letterSpacing: '.06em', marginBottom: 14 }}>RUNNING WEEKLY TOTALS</div>
               {RES.map(r => (
                 <div key={r} style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 9, color: '#aa9050', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4 }}>{RES_ICON[r]} {r}</div>
+                  <div style={{ fontSize: 9, color: '#c8a855', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4 }}>{RES_ICON[r]} {r}</div>
                   <input type="number" style={inp(resCol(Number(editVals[r]) || 0))} value={editVals[r] ?? 0} onChange={e => setEditVals(v => ({ ...v, [r]: e.target.value }))} />
                 </div>
               ))}
@@ -356,7 +356,7 @@ function App() {
 
             {modal === 'report' && <>
               <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 16, fontWeight: 700 }}>Weekly Report</div>
-              <pre style={{ background: '#14151e', border: '1px solid #1e1e22', borderRadius: 3, padding: 12, fontSize: 10, lineHeight: 1.8, color: '#c0a870', whiteSpace: 'pre-wrap', overflowY: 'auto', maxHeight: 340, fontFamily: 'inherit', marginBottom: 14 }}>{report}</pre>
+              <pre style={{ background: '#1a1b22', border: '1px solid #1e1e22', borderRadius: 3, padding: 12, fontSize: 10, lineHeight: 1.8, color: '#d4b878', whiteSpace: 'pre-wrap', overflowY: 'auto', maxHeight: 340, fontFamily: 'inherit', marginBottom: 14 }}>{report}</pre>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button onClick={closeModal} style={btn()}>Close</button>
                 <button onClick={copyReport} style={btn('primary')}>{copied ? 'Copied!' : 'Copy'}</button>
@@ -365,7 +365,7 @@ function App() {
 
             {modal === 'reset' && <>
               <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#ef4444', marginBottom: 14, fontWeight: 700 }}>Reset Week?</div>
-              <p style={{ fontSize: 12, color: '#c0a870', lineHeight: 1.6, marginBottom: 18 }}>Clears all RSS totals and submission tracking. Cannot be undone.</p>
+              <p style={{ fontSize: 12, color: '#d4b878', lineHeight: 1.6, marginBottom: 18 }}>Clears all RSS totals and submission tracking. Cannot be undone.</p>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button onClick={closeModal} style={btn()}>Cancel</button>
                 <button onClick={resetWeek} disabled={saving} style={btn('danger')}>{saving ? 'Resetting...' : 'Confirm Reset'}</button>
