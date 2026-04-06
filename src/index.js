@@ -221,6 +221,153 @@ function Scanner({ players, weekId, onComplete }) {
   );
 }
 
+function RosterSync({ players, onComplete }) {
+  const [phase, setPhase] = useState('upload');
+  const [scannedNames, setScannedNames] = useState(new Set());
+  const [scanning, setScanning] = useState(false);
+  const [scanCount, setScanCount] = useState(0);
+  const [totalFiles, setTotalFiles] = useState(0);
+  const [error, setError] = useState(null);
+  const [applying, setApplying] = useState(false);
+  const [toRemove, setToRemove] = useState(new Set());
+  const [toAdd, setToAdd] = useState(new Set());
+  const fileRef = useRef();
+
+  const newPlayers = [...scannedNames].filter(n => !players.find(p => p.name.toLowerCase() === n.toLowerCase()));
+  const missingPlayers = players.filter(p => ![...scannedNames].find(n => n.toLowerCase() === p.name.toLowerCase()));
+
+  const handleFiles = async files => {
+    const arr = Array.from(files);
+    setTotalFiles(arr.length); setScanCount(0); setError(null); setScanning(true);
+    const allNames = new Set(scannedNames);
+    for (const file of arr) {
+      try {
+        const imageData = await new Promise(res => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const maxDim = 1200;
+            let w = img.width, h = img.height;
+            if (w > maxDim || h > maxDim) {
+              if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
+              else { w = Math.round(w * maxDim / h); h = maxDim; }
+            }
+            canvas.width = w; canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            res({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
+          };
+          img.src = URL.createObjectURL(file);
+        });
+        const resp = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-20250514', max_tokens: 1000,
+            system: 'You are reading a Total Battle clan member list. Extract player names only. Return a JSON array of strings: ["Name1","Name2"]. No markdown.',
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: imageData.mediaType, data: imageData.base64 } },
+              { type: 'text', text: 'Extract all player names from this clan member list. Ignore rank labels, power numbers, and status. JSON array of name strings only.' }
+            ]}]
+          })
+        });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error.message);
+        const extracted = JSON.parse(data.content?.[0]?.text?.replace(/```json|```/g, '').trim());
+        if (Array.isArray(extracted)) extracted.forEach(n => { if (typeof n === 'string' && n.trim()) allNames.add(n.trim()); });
+        setScanCount(c => c + 1);
+      } catch (e) { setError('Error scanning a screenshot: ' + e.message); }
+    }
+    setScannedNames(allNames);
+    setScanning(false);
+  };
+
+  const goToReview = () => {
+    setToAdd(new Set(newPlayers));
+    setToRemove(new Set());
+    setPhase('review');
+  };
+
+  const applyChanges = async () => {
+    setApplying(true);
+    for (const name of toAdd) {
+      await supabase.from('players').insert({ name, rank: 'Soldier', rank_order: 4 });
+    }
+    for (const id of toRemove) {
+      await supabase.from('players').delete().eq('id', id);
+    }
+    setApplying(false);
+    onComplete();
+  };
+
+  const b = (v = 'default', dis) => ({ borderRadius: 3, padding: '6px 14px', fontSize: 10, fontFamily: 'inherit', letterSpacing: '.08em', cursor: dis ? 'not-allowed' : 'pointer', textTransform: 'uppercase', border: '1px solid', opacity: dis ? 0.5 : 1, ...(v === 'primary' ? { background: '#e8a020', color: '#0d0e10', borderColor: '#e8a020', fontWeight: 700 } : v === 'danger' ? { background: '#2a0a0a', color: '#f87171', borderColor: '#7f1d1d' } : { background: '#24252f', color: '#d4b870', borderColor: '#484858' }) });
+
+  return (
+    <div style={{ background: '#1e1f28', border: '1px solid #e8a02040', borderRadius: 6, padding: 20, marginBottom: 16 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 16 }}>👥 Sync Roster</div>
+
+      {phase === 'upload' && <>
+        <p style={{ fontSize: 11, color: '#c8a855', lineHeight: 1.6, marginBottom: 14 }}>Upload all your clan member screenshots. Claude will scan them and show you who is new and who is missing.</p>
+        <div onClick={() => fileRef.current.click()}
+          style={{ border: '2px dashed #484858', borderRadius: 4, padding: 24, textAlign: 'center', cursor: 'pointer', marginBottom: 12 }}>
+          <div style={{ color: '#d4b870', fontSize: 11, letterSpacing: '.06em' }}>
+            {scanning ? `Scanning ${scanCount} of ${totalFiles}...` : scannedNames.size > 0 ? `${scannedNames.size} names found — drop more or click Review` : 'Tap to select clan member screenshots'}
+          </div>
+          {scanning && <div style={{ marginTop: 8, fontSize: 9, color: '#6b7280' }}>This may take a minute for multiple screenshots</div>}
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={e => { handleFiles(e.target.files); e.target.value = ''; }} />
+        {error && <div style={{ color: '#ef4444', fontSize: 11, marginBottom: 10 }}>{error}</div>}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onComplete} style={b()}>Cancel</button>
+          <button onClick={goToReview} disabled={scannedNames.size === 0 || scanning} style={{ ...b('primary', scannedNames.size === 0 || scanning), flex: 1 }}>
+            Review Changes ({scannedNames.size} names found)
+          </button>
+        </div>
+      </>}
+
+      {phase === 'review' && <>
+        {newPlayers.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 10, color: '#22c55e', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 8 }}>New players ({newPlayers.length})</div>
+            {newPlayers.map(name => (
+              <div key={name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', background: '#1a2a1a', borderRadius: 3, marginBottom: 4 }}>
+                <span style={{ fontSize: 12, color: '#f5f0e8' }}>{name}</span>
+                <button onClick={() => setToAdd(s => { const n = new Set(s); n.has(name) ? n.delete(name) : n.add(name); return n; })}
+                  style={{ ...b(toAdd.has(name) ? 'primary' : 'default'), padding: '2px 10px', fontSize: 9 }}>
+                  {toAdd.has(name) ? '✓ Add' : 'Skip'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {missingPlayers.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 10, color: '#ef4444', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 8 }}>Not seen — may have left ({missingPlayers.length})</div>
+            {missingPlayers.map(p => (
+              <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', background: '#2a1a1a', borderRadius: 3, marginBottom: 4 }}>
+                <span style={{ fontSize: 12, color: '#f5f0e8' }}>{p.name} <span style={{ fontSize: 9, color: '#6b7280' }}>{p.rank}</span></span>
+                <button onClick={() => setToRemove(s => { const n = new Set(s); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
+                  style={{ ...b(toRemove.has(p.id) ? 'danger' : 'default'), padding: '2px 10px', fontSize: 9 }}>
+                  {toRemove.has(p.id) ? '✕ Remove' : 'Keep'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {newPlayers.length === 0 && missingPlayers.length === 0 && (
+          <p style={{ fontSize: 12, color: '#22c55e', marginBottom: 16 }}>Roster is up to date — no changes needed.</p>
+        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => setPhase('upload')} style={b()}>Back</button>
+          <button onClick={applyChanges} disabled={applying} style={{ ...b('primary', applying), flex: 1 }}>
+            {applying ? 'Applying...' : `Apply (${toAdd.size} add · ${toRemove.size} remove)`}
+          </button>
+        </div>
+      </>}
+    </div>
+  );
+}
+
 function App() {
   const [players, setPlayers] = useState([]);
   const [submitted, setSubmitted] = useState(emptyS());
@@ -234,6 +381,7 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
+  const [showRoster, setShowRoster] = useState(false);
   const admin = isAdmin();
   const week = useMemo(getWeekLabel, []);
   const weekId = useMemo(getWeekId, []);
@@ -399,7 +547,8 @@ function App() {
         ))}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           <button onClick={() => setSort(s => s === 'rank' ? 'most' : s === 'most' ? 'least' : 'rank')} style={btn()}>Sort: {sort === 'rank' ? 'Rank' : sort === 'most' ? 'Most' : 'Least'}</button>
-          {admin && <button onClick={() => setShowScanner(s => !s)} style={btn(showScanner ? 'active' : 'default')}>📷 Scan</button>}
+          {admin && <button onClick={() => { setShowScanner(s => !s); setShowRoster(false); }} style={btn(showScanner ? 'active' : 'default')}>📷 Scan</button>}
+          {admin && <button onClick={() => { setShowRoster(s => !s); setShowScanner(false); }} style={btn(showRoster ? 'active' : 'default')}>👥 Roster</button>}
           {admin && <button onClick={() => setModal('add')} style={btn()}>+ Player</button>}
           {admin && <button onClick={() => setModal('report')} style={btn()}>Report</button>}
           {admin && <button onClick={() => setModal('reset')} style={btn('danger')}>Reset Week</button>}
@@ -409,6 +558,12 @@ function App() {
       {admin && showScanner && (
         <div style={{ padding: '12px 18px 0' }}>
           <Scanner players={players} weekId={weekId} onComplete={() => { setShowScanner(false); loadData(); }} />
+        </div>
+      )}
+
+      {admin && showRoster && (
+        <div style={{ padding: '12px 18px 0' }}>
+          <RosterSync players={players} onComplete={() => { setShowRoster(false); loadData(); }} />
         </div>
       )}
 
