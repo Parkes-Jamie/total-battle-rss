@@ -56,20 +56,18 @@ const todayIdx = () => { const d = new Date().getDay(); return d === 0 ? 6 : d -
 const isAdmin = () => window.location.pathname === '/admin';
 
 function Scanner({ players, weekId, onComplete }) {
-  const [resource, setResource] = useState('Wood');
-  const [image, setImage] = useState(null);
-  const [imageData, setImageData] = useState(null);
   const [scanning, setScanning] = useState(false);
-  const [scanned, setScanned] = useState(null);
+  const [scanCount, setScanCount] = useState(0);
+  const [totalFiles, setTotalFiles] = useState(0);
+  const [results, setResults] = useState([]); // [{resource, players: [{name, total, playerId}]}]
   const [applying, setApplying] = useState(false);
-  const [newPlayers, setNewPlayers] = useState([]);
   const [error, setError] = useState(null);
+  const [undoData, setUndoData] = useState(null); // snapshot before last apply
+  const [undoing, setUndoing] = useState(false);
+  const [lastMsg, setLastMsg] = useState(null);
   const fileRef = useRef();
 
-  const handleFile = file => {
-    if (!file) return;
-    setImage(URL.createObjectURL(file));
-    setScanned(null); setError(null); setNewPlayers([]);
+  const compressFile = file => new Promise(res => {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
@@ -82,137 +80,150 @@ function Scanner({ players, weekId, onComplete }) {
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-      setImageData({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
+      res({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
     };
     img.src = URL.createObjectURL(file);
-  };
+  });
 
-  const scan = async () => {
-    if (!imageData) return;
-    setScanning(true); setError(null); setScanned(null); setNewPlayers([]);
-    try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_KEY,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 2000,
-          system: 'You are extracting data from a Total Battle game screenshot showing resource contributions. Extract ALL player names and their amounts. Players may appear multiple times — sum their amounts. Return ONLY a JSON array, no markdown. Format: [{"name":"PlayerName","amount":123456}]. Strip + signs. Convert K/M notation.',
-          messages: [{
-            role: 'user',
-            content: [
+  const scanFiles = async files => {
+    const arr = Array.from(files);
+    setTotalFiles(arr.length); setScanCount(0); setError(null); setScanning(true); setResults([]);
+    const allResults = [];
+    for (const file of arr) {
+      try {
+        const imageData = await compressFile(file);
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-20250514', max_tokens: 2000,
+            system: 'You extract data from Total Battle game screenshots showing resource contributions. Identify the resource type from the icon/label in the screenshot (Wood/Stone/Iron/Food/Silver). Extract ALL player names and amounts. Sum duplicates. Return ONLY JSON, no markdown.',
+            messages: [{ role: 'user', content: [
               { type: 'image', source: { type: 'base64', media_type: imageData.mediaType, data: imageData.base64 } },
-              { type: 'text', text: `Extract all player names and total ${resource} amounts. Sum duplicates. JSON array only.` }
-            ]
-          }]
-        })
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error.message);
-      const text = data.content?.[0]?.text || '';
-      const extracted = JSON.parse(text.replace(/```json|```/g, '').trim());
-
-      const matched = [];
-      const unmatched = [];
-      extracted.forEach(({ name, amount }) => {
-        const player = players.find(p => p.name.toLowerCase() === name.toLowerCase());
-        if (player) {
-          const ex = matched.find(m => m.playerId === player.id);
-          if (ex) ex.total += Number(amount);
-          else matched.push({ name: player.name, total: Number(amount), playerId: player.id });
-        } else {
-          const ex = unmatched.find(u => u.name.toLowerCase() === name.toLowerCase());
-          if (ex) ex.total += Number(amount);
-          else unmatched.push({ name, total: Number(amount) });
-        }
-      });
-      setScanned(matched);
-      setNewPlayers(unmatched);
-    } catch (err) {
-      setError(err.message || 'Scan failed.');
+              { type: 'text', text: 'Identify the resource type shown (Wood, Stone, Iron, Food, or Silver) and extract all player names and their total amounts. Return: {"resource":"Wood","players":[{"name":"PlayerName","amount":123456}]}' }
+            ]}]
+          })
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message);
+        const parsed = JSON.parse(data.content?.[0]?.text?.replace(/```json|```/g, '').trim());
+        const resource = parsed.resource;
+        if (!RES.includes(resource)) throw new Error(`Could not identify resource type in screenshot`);
+        const matched = [];
+        (parsed.players || []).forEach(({ name, amount }) => {
+          const player = players.find(p => p.name.toLowerCase() === name.toLowerCase());
+          if (player) {
+            const ex = matched.find(m => m.playerId === player.id);
+            if (ex) ex.total += Number(amount);
+            else matched.push({ name: player.name, total: Number(amount), playerId: player.id });
+          }
+        });
+        allResults.push({ resource, players: matched, file: file.name });
+        setScanCount(c => c + 1);
+      } catch (e) { setError('Error on ' + file.name + ': ' + e.message); }
     }
+    setResults(allResults);
     setScanning(false);
   };
 
-  const applyToSupabase = async () => {
-    if (!scanned?.length && !newPlayers.length) return;
+  const applyAll = async () => {
+    if (!results.length) return;
     setApplying(true);
-    const allScanned = [...scanned];
-
-    for (const np of newPlayers) {
-      const { data } = await supabase.from('players').insert({ name: np.name, rank: 'Soldier', rank_order: 4 }).select().single();
-      if (data) allScanned.push({ name: np.name, total: np.total, playerId: data.id });
+    // Snapshot current state for undo
+    const snapshot = {};
+    for (const r of results) {
+      for (const p of r.players) {
+        if (!snapshot[p.playerId]) {
+          const { data: ex } = await supabase.from('weekly_totals').select('*').eq('player_id', p.playerId).eq('week_id', weekId).maybeSingle();
+          snapshot[p.playerId] = ex || null;
+        }
+      }
     }
-
-    for (const s of allScanned) {
-      const { data: ex } = await supabase.from('weekly_totals').select('*').eq('player_id', s.playerId).eq('week_id', weekId).maybeSingle();
-      const cur = ex ? ex[resource.toLowerCase()] || 0 : 0;
-      await supabase.from('weekly_totals').upsert({
-        player_id: s.playerId, week_id: weekId,
-        wood:   resource === 'Wood'   ? cur + s.total : (ex?.wood   || 0),
-        stone:  resource === 'Stone'  ? cur + s.total : (ex?.stone  || 0),
-        iron:   resource === 'Iron'   ? cur + s.total : (ex?.iron   || 0),
-        food:   resource === 'Food'   ? cur + s.total : (ex?.food   || 0),
-        silver: resource === 'Silver' ? cur + s.total : (ex?.silver || 0),
-      }, { onConflict: 'player_id,week_id' });
+    setUndoData(snapshot);
+    // Apply
+    let totalUpdated = 0;
+    for (const r of results) {
+      const resource = r.resource.toLowerCase();
+      for (const p of r.players) {
+        const { data: ex } = await supabase.from('weekly_totals').select('*').eq('player_id', p.playerId).eq('week_id', weekId).maybeSingle();
+        const cur = ex ? ex[resource] || 0 : 0;
+        await supabase.from('weekly_totals').upsert({
+          player_id: p.playerId, week_id: weekId,
+          wood:   resource === 'wood'   ? cur + p.total : (ex?.wood   || 0),
+          stone:  resource === 'stone'  ? cur + p.total : (ex?.stone  || 0),
+          iron:   resource === 'iron'   ? cur + p.total : (ex?.iron   || 0),
+          food:   resource === 'food'   ? cur + p.total : (ex?.food   || 0),
+          silver: resource === 'silver' ? cur + p.total : (ex?.silver || 0),
+        }, { onConflict: 'player_id,week_id' });
+        totalUpdated++;
+      }
     }
+    const resources = [...new Set(results.map(r => r.resource))].join(', ');
+    setLastMsg(`✓ Applied ${results.length} screenshot${results.length > 1 ? 's' : ''} — ${resources} — ${totalUpdated} player updates`);
+    setResults([]);
     setApplying(false);
     onComplete();
   };
 
-  const b = (v = 'default', dis) => ({ borderRadius: 3, padding: '6px 14px', fontSize: 10, fontFamily: 'inherit', letterSpacing: '.08em', cursor: dis ? 'not-allowed' : 'pointer', textTransform: 'uppercase', border: '1px solid', opacity: dis ? 0.5 : 1, ...(v === 'primary' ? { background: '#e8a020', color: '#0d0e10', borderColor: '#e8a020', fontWeight: 700 } : v === 'danger' ? { background: '#2a0a0a', color: '#f87171', borderColor: '#7f1d1d' } : { background: '#24252f', color: '#d4b870', borderColor: '#484858' }) });
+  const undo = async () => {
+    if (!undoData) return;
+    setUndoing(true);
+    for (const [playerId, prev] of Object.entries(undoData)) {
+      if (prev) {
+        await supabase.from('weekly_totals').upsert({
+          player_id: playerId, week_id: weekId,
+          wood: prev.wood || 0, stone: prev.stone || 0, iron: prev.iron || 0, food: prev.food || 0, silver: prev.silver || 0,
+        }, { onConflict: 'player_id,week_id' });
+      } else {
+        await supabase.from('weekly_totals').delete().eq('player_id', playerId).eq('week_id', weekId);
+      }
+    }
+    setUndoData(null);
+    setLastMsg('↩ Undo applied — data restored to previous state');
+    setUndoing(false);
+    onComplete();
+  };
+
+  const b = (v = 'default', dis) => ({ borderRadius: 3, padding: '6px 14px', fontSize: 10, fontFamily: 'inherit', letterSpacing: '.08em', cursor: dis ? 'not-allowed' : 'pointer', textTransform: 'uppercase', border: '1px solid', opacity: dis ? 0.5 : 1, ...(v === 'primary' ? { background: '#e8a020', color: '#0d0e10', borderColor: '#e8a020', fontWeight: 700 } : v === 'danger' ? { background: '#2a0a0a', color: '#f87171', borderColor: '#7f1d1d' } : v === 'undo' ? { background: '#1a1a2a', color: '#a78bfa', borderColor: '#4c4880' } : { background: '#24252f', color: '#d4b870', borderColor: '#484858' }) });
 
   return (
     <div style={{ background: '#1e1f28', border: '1px solid #e8a02040', borderRadius: 6, padding: 20, marginBottom: 16 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 16 }}>📷 Scan Screenshot</div>
-      <div style={{ fontSize: 9, color: '#c8a855', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 6 }}>Resource</div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
-        {RES.map(r => (
-          <button key={r} onClick={() => { setResource(r); setScanned(null); }} style={{ ...b(), background: resource === r ? RES_COL[r] + '30' : '#24252f', color: resource === r ? RES_COL[r] : '#d4b870', borderColor: resource === r ? RES_COL[r] + '80' : '#484858', fontWeight: resource === r ? 700 : 400 }}>
-            {RES_ICON[r]} {r}
-          </button>
-        ))}
-      </div>
-      <div onClick={() => fileRef.current.click()} onDrop={e => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); }} onDragOver={e => e.preventDefault()}
-        style={{ border: '2px dashed #484858', borderRadius: 4, padding: image ? 0 : 24, textAlign: 'center', cursor: 'pointer', marginBottom: 12, overflow: 'hidden' }}>
-        {image ? <img src={image} alt="preview" style={{ width: '100%', maxHeight: 200, objectFit: 'contain', display: 'block' }} /> : <div style={{ color: '#d4b870', fontSize: 11, letterSpacing: '.06em' }}>Drop screenshot here or click to upload</div>}
-      </div>
-      <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleFile(e.target.files[0])} />
-      <button onClick={scan} disabled={!imageData || scanning} style={{ ...b('primary', !imageData || scanning), width: '100%', marginBottom: 12, padding: '8px' }}>
-        {scanning ? 'Scanning...' : `Scan for ${resource} Data`}
-      </button>
-      {error && <div style={{ color: '#ef4444', fontSize: 11, padding: 10, background: '#2a0a0a', borderRadius: 3, border: '1px solid #7f1d1d', marginBottom: 12 }}>{error}</div>}
-      {newPlayers.length > 0 && (
-        <div style={{ background: '#1a1200', border: '1px solid #e8a02040', borderRadius: 4, padding: 12, marginBottom: 12 }}>
-          <div style={{ fontSize: 10, color: '#e8a020', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 8 }}>⚠ New players — will be added as Soldier</div>
-          {newPlayers.map(p => (
-            <div key={p.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #2a2a1a' }}>
-              <span style={{ fontSize: 12, color: '#f5f0e8' }}>{p.name} <span style={{ color: '#d4b870' }}>({fmt(p.total)})</span></span>
-              <button onClick={() => setNewPlayers(prev => prev.filter(x => x.name !== p.name))} style={{ ...b('danger'), padding: '2px 8px', fontSize: 9 }}>Remove</button>
-            </div>
-          ))}
+      <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 8 }}>📷 Scan RSS Screenshots</div>
+      <div style={{ fontSize: 11, color: '#c8a855', marginBottom: 14, lineHeight: 1.5 }}>Upload all your RSS screenshots at once — resource type is detected automatically from each screenshot.</div>
+
+      {lastMsg && (
+        <div style={{ fontSize: 11, color: lastMsg.startsWith('✓') ? '#22c55e' : '#a78bfa', background: '#1a1b22', border: '1px solid #484858', borderRadius: 3, padding: '8px 12px', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>{lastMsg}</span>
+          {undoData && <button onClick={undo} disabled={undoing} style={{ ...b('undo', undoing), padding: '3px 10px', fontSize: 9 }}>{undoing ? 'Undoing...' : '↩ Undo'}</button>}
         </div>
       )}
-      {scanned && (
-        <div>
-          <div style={{ fontSize: 10, color: '#c8a855', letterSpacing: '.06em', marginBottom: 8 }}>{scanned.length} players matched · {RES_ICON[resource]} {resource}</div>
-          <div style={{ maxHeight: 200, overflowY: 'auto', marginBottom: 12, border: '1px solid #484858', borderRadius: 3 }}>
-            {scanned.map((p, i) => (
-              <div key={p.playerId} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', background: i % 2 === 0 ? '#1e1f28' : '#24252f', fontSize: 12 }}>
-                <span style={{ color: '#f5f0e8' }}>{p.name}</span>
-                <span style={{ color: RES_COL[resource], fontWeight: 600 }}>{fmt(p.total)}</span>
-              </div>
-            ))}
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => { setScanned(null); setImage(null); setImageData(null); setNewPlayers([]); }} style={b()}>Clear</button>
-            <button onClick={applyToSupabase} disabled={applying} style={{ ...b('primary', applying), flex: 1 }}>
-              {applying ? 'Applying...' : `Apply to Week`}
+
+      <div onClick={() => fileRef.current.click()}
+        onDrop={e => { e.preventDefault(); scanFiles(e.dataTransfer.files); }}
+        onDragOver={e => e.preventDefault()}
+        style={{ border: '2px dashed #484858', borderRadius: 4, padding: 24, textAlign: 'center', cursor: 'pointer', marginBottom: 12 }}>
+        <div style={{ color: '#d4b870', fontSize: 11, letterSpacing: '.06em' }}>
+          {scanning ? `Scanning ${scanCount} of ${totalFiles}...` : 'Tap to select all RSS screenshots'}
+        </div>
+        {scanning && <div style={{ marginTop: 6, fontSize: 9, color: '#6b7280' }}>Detecting resource types automatically...</div>}
+      </div>
+      <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={e => { scanFiles(e.target.files); e.target.value = ''; }} />
+
+      {error && <div style={{ color: '#ef4444', fontSize: 11, padding: 10, background: '#2a0a0a', borderRadius: 3, border: '1px solid #7f1d1d', marginBottom: 12 }}>{error}</div>}
+
+      {results.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 10, color: '#c8a855', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 8 }}>{results.length} screenshots ready to apply</div>
+          {results.map((r, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', background: i % 2 === 0 ? '#1e1f28' : '#24252f', borderRadius: 3, marginBottom: 2, fontSize: 11 }}>
+              <span style={{ color: RES_COL[r.resource] }}>{RES_ICON[r.resource]} {r.resource}</span>
+              <span style={{ color: '#c8a855' }}>{r.players.length} players</span>
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button onClick={() => setResults([])} style={b()}>Clear</button>
+            <button onClick={applyAll} disabled={applying} style={{ ...b('primary', applying), flex: 1 }}>
+              {applying ? 'Applying...' : `Apply All ${results.length} Screenshots`}
             </button>
           </div>
         </div>
@@ -223,7 +234,7 @@ function Scanner({ players, weekId, onComplete }) {
 
 function RosterSync({ players, onComplete }) {
   const [phase, setPhase] = useState('upload');
-  const [scannedNames, setScannedNames] = useState(new Set());
+  const [scannedNames, setScannedNames] = useState(new Map());
   const [scanning, setScanning] = useState(false);
   const [scanCount, setScanCount] = useState(0);
   const [totalFiles, setTotalFiles] = useState(0);
@@ -233,13 +244,13 @@ function RosterSync({ players, onComplete }) {
   const [toAdd, setToAdd] = useState(new Set());
   const fileRef = useRef();
 
-  const newPlayers = [...scannedNames].filter(n => !players.find(p => p.name.toLowerCase() === n.toLowerCase()));
-  const missingPlayers = players.filter(p => ![...scannedNames].find(n => n.toLowerCase() === p.name.toLowerCase()));
+  const newPlayers = [...scannedNames.keys()].filter(n => !players.find(p => p.name.toLowerCase() === n.toLowerCase()));
+  const missingPlayers = players.filter(p => ![...scannedNames.keys()].find(n => n.toLowerCase() === p.name.toLowerCase()));
 
   const handleFiles = async files => {
     const arr = Array.from(files);
     setTotalFiles(arr.length); setScanCount(0); setError(null); setScanning(true);
-    const allNames = new Set(scannedNames);
+    const allNames = new Map(scannedNames);
     for (const file of arr) {
       try {
         const imageData = await new Promise(res => {
@@ -264,17 +275,21 @@ function RosterSync({ players, onComplete }) {
           headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
           body: JSON.stringify({
             model: 'claude-sonnet-4-20250514', max_tokens: 1000,
-            system: 'You are reading a Total Battle clan member list. Extract player names only. Return a JSON array of strings: ["Name1","Name2"]. No markdown.',
+            system: 'You are reading a Total Battle clan member list. Extract player names and their might/power numbers. Return a JSON array: [{"name":"PlayerName","might":12345678}]. No markdown.',
             messages: [{ role: 'user', content: [
               { type: 'image', source: { type: 'base64', media_type: imageData.mediaType, data: imageData.base64 } },
-              { type: 'text', text: 'Extract all player names from this clan member list. Ignore rank labels, power numbers, and status. JSON array of name strings only.' }
+              { type: 'text', text: 'Extract all player names and their might/power numbers from this clan member list. Ignore rank labels and status text. Return JSON array of {name, might} objects.' }
             ]}]
           })
         });
         const data = await resp.json();
         if (data.error) throw new Error(data.error.message);
         const extracted = JSON.parse(data.content?.[0]?.text?.replace(/```json|```/g, '').trim());
-        if (Array.isArray(extracted)) extracted.forEach(n => { if (typeof n === 'string' && n.trim()) allNames.add(n.trim()); });
+        if (Array.isArray(extracted)) extracted.forEach(e => {
+          const name = typeof e === 'string' ? e : e.name;
+          const might = typeof e === 'object' ? (e.might || 0) : 0;
+          if (name && name.trim()) allNames.set(name.trim(), might);
+        });
         setScanCount(c => c + 1);
       } catch (e) { setError('Error scanning a screenshot: ' + e.message); }
     }
@@ -291,10 +306,19 @@ function RosterSync({ players, onComplete }) {
   const applyChanges = async () => {
     setApplying(true);
     for (const name of toAdd) {
-      await supabase.from('players').insert({ name, rank: 'Soldier', rank_order: 4 });
+      const might = scannedNames.get(name) || 0;
+      await supabase.from('players').insert({ name, rank: 'Soldier', rank_order: 4, might });
     }
     for (const id of toRemove) {
       await supabase.from('players').delete().eq('id', id);
+    }
+    // Update might for all existing players found in scan
+    for (const p of players) {
+      const found = [...scannedNames.keys()].find(n => n.toLowerCase() === p.name.toLowerCase());
+      if (found) {
+        const might = scannedNames.get(found) || 0;
+        if (might > 0) await supabase.from('players').update({ might }).eq('id', p.id);
+      }
     }
     setApplying(false);
     onComplete();
@@ -392,12 +416,12 @@ function App() {
   useEffect(() => { loadData(); const iv = setInterval(loadData, 60000); return () => clearInterval(iv); }, []);
 
   const loadData = async () => {
-    const { data: pd } = await supabase.from('players').select('*').order('rank_order').order('name');
+    const { data: pd } = await supabase.from('players').select('*').order('rank_order').order('might', { ascending: false }).order('name');
     const { data: td } = await supabase.from('weekly_totals').select('*').eq('week_id', weekId);
     const { data: sd } = await supabase.from('submissions').select('*').eq('week_id', weekId).maybeSingle();
     const tm = {};
     (td || []).forEach(t => { tm[t.player_id] = { Wood: t.wood, Stone: t.stone, Iron: t.iron, Food: t.food, Silver: t.silver }; });
-    setPlayers((pd || []).map(p => ({ id: p.id, name: p.name, rank: p.rank, totals: tm[p.id] || emptyT() })));
+    setPlayers((pd || []).map(p => ({ id: p.id, name: p.name, rank: p.rank, might: p.might || 0, totals: tm[p.id] || emptyT() })));
     if (sd?.data) setSubmitted(sd.data);
     setLoading(false);
   };
@@ -417,7 +441,7 @@ function App() {
 
   const filtered = useMemo(() => {
     let list = filter === 'All' ? [...processed] : processed.filter(p => p.status === filter);
-    if (sort === 'rank') return list.sort((a, b) => rankIdx(a.rank) - rankIdx(b.rank) || a.name.localeCompare(b.name));
+    if (sort === 'rank') return list.sort((a, b) => rankIdx(a.rank) - rankIdx(b.rank) || (b.might || 0) - (a.might || 0) || a.name.localeCompare(b.name));
     if (sort === 'most') return list.sort((a, b) => b.total - a.total);
     if (sort === 'least') return list.sort((a, b) => a.total - b.total);
     return list.sort((a, b) => a.worst - b.worst);
