@@ -376,6 +376,8 @@ function App() {
   const [modal, setModal] = useState(null);
   const [editId, setEditId] = useState(null);
   const [editVals, setEditVals] = useState({});
+  const [editName, setEditName] = useState('');
+  const [editRank, setEditRank] = useState('Soldier');
   const [newP, setNewP] = useState({ name: '', rank: 'Soldier' });
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -424,11 +426,12 @@ function App() {
   const summary = useMemo(() => { const c = { Done: 0, 'On Track': 0, Slow: 0, Behind: 0 }; processed.forEach(p => c[p.status]++); return c; }, [processed]);
 
   const closeModal = () => { setModal(null); setEditId(null); };
-  const openEdit = p => { setEditVals({ ...p.totals }); setEditId(p.id); setModal('edit'); };
+  const openEdit = p => { setEditVals({ ...p.totals }); setEditId(p.id); setEditName(p.name); setEditRank(p.rank); setModal('edit'); };
 
   const saveEdit = async () => {
     setSaving(true);
     const t = Object.fromEntries(RES.map(r => [r, Number(editVals[r]) || 0]));
+    await supabase.from('players').update({ name: editName.trim(), rank: editRank, rank_order: rankIdx(editRank) }).eq('id', editId);
     await supabase.from('weekly_totals').upsert({ player_id: editId, week_id: weekId, wood: t.Wood, stone: t.Stone, iron: t.Iron, food: t.Food, silver: t.Silver }, { onConflict: 'player_id,week_id' });
     await loadData(); setSaving(false); closeModal();
   };
@@ -579,12 +582,19 @@ function App() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((p, i) => (
-              <tr key={p.id} style={{ background: i % 2 === 0 ? '#1a1b22' : '#22232c', borderBottom: '1px solid #20212a' }}>
+            {filtered.map((p, i) => {
+              const isNew = p.rank === 'Soldier' && p.totals && Object.values(p.totals).every(v => v === 0);
+              return (
+              <tr key={p.id} style={{ background: isNew ? '#2a1a00' : i % 2 === 0 ? '#1a1b22' : '#22232c', borderBottom: '1px solid #20212a', borderLeft: isNew ? '3px solid #e8a020' : 'none' }}>
                 <td style={{ padding: '5px 0 5px 8px' }}><div style={{ width: 3, height: 30, borderRadius: 2, background: RANK_COL[p.rank], opacity: .85 }} /></td>
                 <td style={{ padding: '5px 8px' }}>
-                  <div style={{ fontSize: 12, color: '#f5f0e8' }}>{p.name}</div>
-                  <div style={{ fontSize: 9, color: RANK_COL[p.rank], letterSpacing: '.08em', textTransform: 'uppercase', marginTop: 1 }}>{p.rank}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {admin && <span onClick={() => openEdit(p)} style={{ fontSize: 9, color: isNew ? '#e8a020' : '#c8a855', cursor: 'pointer', letterSpacing: '.06em', textTransform: 'uppercase', flexShrink: 0 }} onMouseOver={e => e.target.style.color = '#e8a020'} onMouseOut={e => e.target.style.color = isNew ? '#e8a020' : '#c8a855'}>Edit</span>}
+                    <div>
+                      <div style={{ fontSize: 12, color: isNew ? '#e8a020' : '#f5f0e8' }}>{p.name} {isNew && <span style={{ fontSize: 9, color: '#e8a020', background: '#e8a02020', border: '1px solid #e8a02040', borderRadius: 2, padding: '1px 5px', marginLeft: 4 }}>NEW</span>}</div>
+                      <div style={{ fontSize: 9, color: RANK_COL[p.rank], letterSpacing: '.08em', textTransform: 'uppercase', marginTop: 1 }}>{p.rank}</div>
+                    </div>
+                  </div>
                 </td>
                 <td style={{ padding: '5px 8px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -594,13 +604,13 @@ function App() {
                 </td>
                 {RES.map(r => <td key={r} style={{ textAlign: 'right', padding: '5px 8px', fontVariantNumeric: 'tabular-nums', color: resCol(p.totals[r] || 0), fontWeight: (p.totals[r] || 0) >= TARGET ? 600 : 400, fontSize: 12 }}>{fmt(p.totals[r] || 0)}</td>)}
                 {admin && (
-                  <td style={{ padding: '5px 8px' }}>
-                    <span onClick={() => openEdit(p)} style={{ fontSize: 9, color: '#c8a855', cursor: 'pointer', letterSpacing: '.06em', textTransform: 'uppercase', marginRight: 8 }} onMouseOver={e => e.target.style.color = '#e8a020'} onMouseOut={e => e.target.style.color = '#c8a855'}>Edit</span>
+                  <td style={{ padding: '5px 8px', textAlign: 'right' }}>
                     <span onClick={() => removePlayer(p.id)} style={{ fontSize: 9, color: '#884444', cursor: 'pointer' }} onMouseOver={e => e.target.style.color = '#ef4444'} onMouseOut={e => e.target.style.color = '#884444'}>✕</span>
                   </td>
                 )}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -622,8 +632,14 @@ function App() {
               </div>
             </>}
             {modal === 'edit' && editPlayer && <>
-              <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 6, fontWeight: 700 }}>Edit — {editPlayer.name}</div>
-              <div style={{ fontSize: 9, color: '#c8a850', letterSpacing: '.06em', marginBottom: 14 }}>RUNNING WEEKLY TOTALS</div>
+              <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 16, fontWeight: 700 }}>Edit Player</div>
+              <div style={{ fontSize: 9, color: '#c8a855', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4 }}>Name</div>
+              <input style={inp()} value={editName} onChange={e => setEditName(e.target.value)} placeholder="Player name..." />
+              <div style={{ fontSize: 9, color: '#c8a855', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4, marginTop: 10 }}>Rank</div>
+              <select style={inp()} value={editRank} onChange={e => setEditRank(e.target.value)}>
+                {RANKS.map(r => <option key={r}>{r}</option>)}
+              </select>
+              <div style={{ fontSize: 9, color: '#c8a850', letterSpacing: '.06em', marginTop: 14, marginBottom: 10 }}>WEEKLY TOTALS</div>
               {RES.map(r => (
                 <div key={r} style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: 9, color: '#c8a855', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4 }}>{RES_ICON[r]} {r}</div>
