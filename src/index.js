@@ -18,36 +18,58 @@ const STAT_COL = { Done: '#22c55e', 'On Track': '#f59e0b', Slow: '#ef4444', Behi
 const RES_ICON = { Wood: '🪵', Stone: '🪨', Iron: '⚙️', Food: '🌾', Silver: '💠' };
 const RES_COL = { Wood: '#d97706', Stone: '#9ca3af', Iron: '#60a5fa', Food: '#4ade80', Silver: '#c084fc' };
 
-const fmt = v => v === 0 ? '—' : (v / 1000).toFixed(1) + 'k';
+const fmt = v => v === 0 ? '—' : v >= 1000000 ? (v / 1000000).toFixed(2) + 'M' : (v / 1000).toFixed(1) + 'k';
 const rankIdx = r => RANKS.indexOf(r);
 const resCol = v => v === 0 ? '#555' : v >= TARGET ? '#22c55e' : v >= HALF ? '#f59e0b' : '#ef4444';
 const emptyT = () => Object.fromEntries(RES.map(r => [r, 0]));
 const emptyS = () => Object.fromEntries(DAYS.map(d => [d, Object.fromEntries(RES.map(r => [r, false]))]));
 
-// FIX 1: Week ID is now stored in Supabase and only advances when you manually reset.
-// On first load, if no active week exists, we create one from the current Monday.
-const getMondayId = () => {
+const getStatus = t => {
+  const vals = RES.map(r => t[r] || 0);
+  if (vals.every(v => v >= TARGET)) return 'Done';
+  const w = Math.min(...vals);
+  if (w >= HALF) return 'On Track';
+  if (w > 0) return 'Slow';
+  return 'Behind';
+};
+
+const getWeekLabel = () => {
   const now = new Date();
   const d = now.getDay();
   const mon = new Date(now);
   mon.setDate(now.getDate() - d + (d === 0 ? -6 : 1));
-  mon.setHours(0, 0, 0, 0);
-  return mon.toISOString().split('T')[0];
-};
-
-const getWeekLabelFromId = (id) => {
-  const mon = new Date(id);
   const sun = new Date(mon);
   sun.setDate(mon.getDate() + 6);
   const f = x => x.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
   return `${f(mon)} – ${f(sun)}`;
 };
 
+const getWeekId = () => {
+  const now = new Date();
+  const d = now.getDay();
+  const mon = new Date(now);
+  mon.setDate(now.getDate() - d + (d === 0 ? -6 : 1));
+  return mon.toISOString().split('T')[0];
+};
+
 const todayIdx = () => { const d = new Date().getDay(); return d === 0 ? 6 : d - 1; };
 const isAdmin = () => window.location.pathname === '/admin';
 
-function compress(file) {
-  return new Promise(res => {
+function Scanner({ players, weekId, onComplete }) {
+  const [resource, setResource] = useState('Wood');
+  const [image, setImage] = useState(null);
+  const [imageData, setImageData] = useState(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanned, setScanned] = useState(null);
+  const [applying, setApplying] = useState(false);
+  const [newPlayers, setNewPlayers] = useState([]);
+  const [error, setError] = useState(null);
+  const fileRef = useRef();
+
+  const handleFile = file => {
+    if (!file) return;
+    setImage(URL.createObjectURL(file));
+    setScanned(null); setError(null); setNewPlayers([]);
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
@@ -60,63 +82,43 @@ function compress(file) {
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-      res({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
+      setImageData({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
     };
     img.src = URL.createObjectURL(file);
-  });
-}
-
-async function callClaude(imageData, prompt) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_KEY,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
-      system: 'You are extracting data from a Total Battle game screenshot. Return ONLY a JSON array, no markdown.',
-      messages: [{ role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: imageData.mediaType, data: imageData.base64 } },
-        { type: 'text', text: prompt }
-      ]}]
-    })
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  return JSON.parse(data.content?.[0]?.text?.replace(/```json|```/g, '').trim());
-}
-
-// ── SCANNER ────────────────────────────────────────────────────────────────
-function Scanner({ players, weekId, onComplete }) {
-  const [resource, setResource] = useState('Wood');
-  const [image, setImage] = useState(null);
-  const [imageData, setImageData] = useState(null);
-  const [scanning, setScanning] = useState(false);
-  const [scanned, setScanned] = useState(null);
-  const [applying, setApplying] = useState(false);
-  const [newPlayers, setNewPlayers] = useState([]);
-  const [error, setError] = useState(null);
-  const fileRef = useRef();
-
-  const handleFile = async file => {
-    if (!file) return;
-    setImage(URL.createObjectURL(file));
-    setScanned(null); setError(null); setNewPlayers([]);
-    setImageData(await compress(file));
   };
 
   const scan = async () => {
     if (!imageData) return;
     setScanning(true); setError(null); setScanned(null); setNewPlayers([]);
     try {
-      const extracted = await callClaude(imageData,
-        `Extract all player names and total ${resource} amounts from this Total Battle screenshot. Sum duplicates. Format: [{"name":"PlayerName","amount":123456}]`
-      );
-      const matched = [], unmatched = [];
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': ANTHROPIC_KEY,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 2000,
+          system: 'You are extracting data from a Total Battle game screenshot showing resource contributions. Extract ALL player names and their amounts. Players may appear multiple times — sum their amounts. Return ONLY a JSON array, no markdown. Format: [{"name":"PlayerName","amount":123456}]. Strip + signs. Convert K/M notation.',
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: imageData.mediaType, data: imageData.base64 } },
+              { type: 'text', text: `Extract all player names and total ${resource} amounts. Sum duplicates. JSON array only.` }
+            ]
+          }]
+        })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      const text = data.content?.[0]?.text || '';
+      const extracted = JSON.parse(text.replace(/```json|```/g, '').trim());
+
+      const matched = [];
+      const unmatched = [];
       extracted.forEach(({ name, amount }) => {
         const player = players.find(p => p.name.toLowerCase() === name.toLowerCase());
         if (player) {
@@ -129,8 +131,11 @@ function Scanner({ players, weekId, onComplete }) {
           else unmatched.push({ name, total: Number(amount) });
         }
       });
-      setScanned(matched); setNewPlayers(unmatched);
-    } catch (err) { setError(err.message || 'Scan failed.'); }
+      setScanned(matched);
+      setNewPlayers(unmatched);
+    } catch (err) {
+      setError(err.message || 'Scan failed.');
+    }
     setScanning(false);
   };
 
@@ -138,10 +143,12 @@ function Scanner({ players, weekId, onComplete }) {
     if (!scanned?.length && !newPlayers.length) return;
     setApplying(true);
     const allScanned = [...scanned];
+
     for (const np of newPlayers) {
       const { data } = await supabase.from('players').insert({ name: np.name, rank: 'Soldier', rank_order: 4 }).select().single();
       if (data) allScanned.push({ name: np.name, total: np.total, playerId: data.id });
     }
+
     for (const s of allScanned) {
       const { data: ex } = await supabase.from('weekly_totals').select('*').eq('player_id', s.playerId).eq('week_id', weekId).maybeSingle();
       const cur = ex ? ex[resource.toLowerCase()] || 0 : 0;
@@ -162,7 +169,7 @@ function Scanner({ players, weekId, onComplete }) {
 
   return (
     <div style={{ background: '#1e1f28', border: '1px solid #e8a02040', borderRadius: 6, padding: 20, marginBottom: 16 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 16 }}>📷 Scan RSS Screenshot</div>
+      <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 16 }}>📷 Scan Screenshot</div>
       <div style={{ fontSize: 9, color: '#c8a855', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 6 }}>Resource</div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
         {RES.map(r => (
@@ -173,7 +180,7 @@ function Scanner({ players, weekId, onComplete }) {
       </div>
       <div onClick={() => fileRef.current.click()} onDrop={e => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); }} onDragOver={e => e.preventDefault()}
         style={{ border: '2px dashed #484858', borderRadius: 4, padding: image ? 0 : 24, textAlign: 'center', cursor: 'pointer', marginBottom: 12, overflow: 'hidden' }}>
-        {image ? <img src={image} alt="preview" style={{ width: '100%', maxHeight: 200, objectFit: 'contain', display: 'block' }} /> : <div style={{ color: '#d4b870', fontSize: 11, letterSpacing: '.06em' }}>Drop screenshot here or tap to upload</div>}
+        {image ? <img src={image} alt="preview" style={{ width: '100%', maxHeight: 200, objectFit: 'contain', display: 'block' }} /> : <div style={{ color: '#d4b870', fontSize: 11, letterSpacing: '.06em' }}>Drop screenshot here or click to upload</div>}
       </div>
       <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleFile(e.target.files[0])} />
       <button onClick={scan} disabled={!imageData || scanning} style={{ ...b('primary', !imageData || scanning), width: '100%', marginBottom: 12, padding: '8px' }}>
@@ -182,11 +189,11 @@ function Scanner({ players, weekId, onComplete }) {
       {error && <div style={{ color: '#ef4444', fontSize: 11, padding: 10, background: '#2a0a0a', borderRadius: 3, border: '1px solid #7f1d1d', marginBottom: 12 }}>{error}</div>}
       {newPlayers.length > 0 && (
         <div style={{ background: '#1a1200', border: '1px solid #e8a02040', borderRadius: 4, padding: 12, marginBottom: 12 }}>
-          <div style={{ fontSize: 10, color: '#e8a020', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 8 }}>New players — will be added as Soldier</div>
+          <div style={{ fontSize: 10, color: '#e8a020', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 8 }}>⚠ New players — will be added as Soldier</div>
           {newPlayers.map(p => (
             <div key={p.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #2a2a1a' }}>
               <span style={{ fontSize: 12, color: '#f5f0e8' }}>{p.name} <span style={{ color: '#d4b870' }}>({fmt(p.total)})</span></span>
-              <button onClick={() => setNewPlayers(prev => prev.filter(x => x.name !== p.name))} style={{ ...b('danger'), padding: '2px 8px', fontSize: 9 }}>Skip</button>
+              <button onClick={() => setNewPlayers(prev => prev.filter(x => x.name !== p.name))} style={{ ...b('danger'), padding: '2px 8px', fontSize: 9 }}>Remove</button>
             </div>
           ))}
         </div>
@@ -205,7 +212,7 @@ function Scanner({ players, weekId, onComplete }) {
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => { setScanned(null); setImage(null); setImageData(null); setNewPlayers([]); }} style={b()}>Clear</button>
             <button onClick={applyToSupabase} disabled={applying} style={{ ...b('primary', applying), flex: 1 }}>
-              {applying ? 'Applying...' : 'Apply to Week'}
+              {applying ? 'Applying...' : `Apply to Week`}
             </button>
           </div>
         </div>
@@ -214,130 +221,6 @@ function Scanner({ players, weekId, onComplete }) {
   );
 }
 
-// FIX 2: ROSTER SYNC — bulk upload 10-15 screenshots, diff against current roster
-function RosterSync({ players, onComplete }) {
-  const [phase, setPhase] = useState('upload'); // upload | review
-  const [scannedNames, setScannedNames] = useState(new Set());
-  const [scanning, setScanning] = useState(false);
-  const [scanCount, setScanCount] = useState(0);
-  const [totalFiles, setTotalFiles] = useState(0);
-  const [error, setError] = useState(null);
-  const [applying, setApplying] = useState(false);
-  const fileRef = useRef();
-
-  // Derived review lists
-  const newPlayers = [...scannedNames].filter(n => !players.find(p => p.name.toLowerCase() === n.toLowerCase()));
-  const missingPlayers = players.filter(p => ![...scannedNames].find(n => n.toLowerCase() === p.name.toLowerCase()));
-  const [toRemove, setToRemove] = useState(new Set());
-  const [toAdd, setToAdd] = useState(new Set());
-
-  useEffect(() => { if (phase === 'review') { setToAdd(new Set(newPlayers)); setToRemove(new Set()); } }, [phase]);
-
-  const handleFiles = async (files) => {
-    const arr = Array.from(files);
-    setTotalFiles(arr.length); setScanCount(0); setError(null); setScanning(true);
-    const allNames = new Set(scannedNames);
-    for (const file of arr) {
-      try {
-        const imageData = await compress(file);
-        const extracted = await callClaude(imageData,
-          'This is a Total Battle clan member list screenshot. Extract ALL player names visible. Ignore rank labels (Leader, Superior, Officer, Veteran, Soldier), power numbers, and status text. Return ONLY a JSON array of name strings: ["Name1","Name2",...]'
-        );
-        if (Array.isArray(extracted)) extracted.forEach(n => { if (typeof n === 'string' && n.trim()) allNames.add(n.trim()); });
-        setScanCount(c => c + 1);
-      } catch (e) { setError('Error on one screenshot: ' + e.message); }
-    }
-    setScannedNames(allNames);
-    setScanning(false);
-  };
-
-  const applyChanges = async () => {
-    setApplying(true);
-    for (const name of toAdd) {
-      await supabase.from('players').insert({ name, rank: 'Soldier', rank_order: 4 });
-    }
-    for (const p of players.filter(p => toRemove.has(p.id))) {
-      await supabase.from('players').delete().eq('id', p.id);
-    }
-    setApplying(false);
-    onComplete();
-  };
-
-  const b = (v = 'default', dis) => ({ borderRadius: 3, padding: '6px 14px', fontSize: 10, fontFamily: 'inherit', letterSpacing: '.08em', cursor: dis ? 'not-allowed' : 'pointer', textTransform: 'uppercase', border: '1px solid', opacity: dis ? 0.5 : 1, ...(v === 'primary' ? { background: '#e8a020', color: '#0d0e10', borderColor: '#e8a020', fontWeight: 700 } : v === 'danger' ? { background: '#2a0a0a', color: '#f87171', borderColor: '#7f1d1d' } : { background: '#24252f', color: '#d4b870', borderColor: '#484858' }) });
-
-  return (
-    <div style={{ background: '#1e1f28', border: '1px solid #e8a02040', borderRadius: 6, padding: 20, marginBottom: 16 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 16 }}>👥 Sync Roster</div>
-
-      {phase === 'upload' && (
-        <>
-          <p style={{ fontSize: 11, color: '#c8a855', lineHeight: 1.6, marginBottom: 14 }}>
-            Upload all your clan member screenshots (10–15 is fine). Claude will scan them all and show you who's new and who's missing.
-          </p>
-          <div onClick={() => fileRef.current.click()}
-            style={{ border: '2px dashed #484858', borderRadius: 4, padding: 24, textAlign: 'center', cursor: 'pointer', marginBottom: 12 }}>
-            <div style={{ color: '#d4b870', fontSize: 11, letterSpacing: '.06em' }}>
-              {scanning ? `Scanning ${scanCount} of ${totalFiles}...` : scannedNames.size > 0 ? `${scannedNames.size} names found — drop more or click Review` : 'Tap to select all clan member screenshots'}
-            </div>
-            {scanning && <div style={{ marginTop: 8, fontSize: 9, color: '#6b7280' }}>This may take a minute for multiple screenshots</div>}
-          </div>
-          <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={e => { handleFiles(e.target.files); e.target.value = ''; }} />
-          {error && <div style={{ color: '#ef4444', fontSize: 11, marginBottom: 10 }}>{error}</div>}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={onComplete} style={b()}>Cancel</button>
-            <button onClick={() => setPhase('review')} disabled={scannedNames.size === 0 || scanning} style={{ ...b('primary', scannedNames.size === 0 || scanning), flex: 1 }}>
-              Review Changes ({scannedNames.size} names found)
-            </button>
-          </div>
-        </>
-      )}
-
-      {phase === 'review' && (
-        <>
-          {newPlayers.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 10, color: '#22c55e', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 8 }}>New players ({newPlayers.length})</div>
-              {newPlayers.map(name => (
-                <div key={name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', background: '#1a2a1a', borderRadius: 3, marginBottom: 4 }}>
-                  <span style={{ fontSize: 12, color: '#f5f0e8' }}>{name}</span>
-                  <button onClick={() => setToAdd(s => { const n = new Set(s); n.has(name) ? n.delete(name) : n.add(name); return n; })}
-                    style={{ ...b(toAdd.has(name) ? 'primary' : 'default'), padding: '2px 10px', fontSize: 9 }}>
-                    {toAdd.has(name) ? '✓ Add' : 'Skip'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          {missingPlayers.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 10, color: '#ef4444', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 8 }}>Not seen in screenshots ({missingPlayers.length}) — may have left</div>
-              {missingPlayers.map(p => (
-                <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', background: '#2a1a1a', borderRadius: 3, marginBottom: 4 }}>
-                  <span style={{ fontSize: 12, color: '#f5f0e8' }}>{p.name} <span style={{ fontSize: 9, color: '#6b7280' }}>{p.rank}</span></span>
-                  <button onClick={() => setToRemove(s => { const n = new Set(s); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
-                    style={{ ...b(toRemove.has(p.id) ? 'danger' : 'default'), padding: '2px 10px', fontSize: 9 }}>
-                    {toRemove.has(p.id) ? '✕ Remove' : 'Keep'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          {newPlayers.length === 0 && missingPlayers.length === 0 && (
-            <p style={{ fontSize: 12, color: '#22c55e', marginBottom: 16 }}>Roster is up to date — no changes needed.</p>
-          )}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => setPhase('upload')} style={b()}>Back</button>
-            <button onClick={applyChanges} disabled={applying} style={{ ...b('primary', applying), flex: 1 }}>
-              {applying ? 'Applying...' : `Apply Changes (${toAdd.size} add, ${toRemove.size} remove)`}
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── MAIN APP ───────────────────────────────────────────────────────────────
 function App() {
   const [players, setPlayers] = useState([]);
   const [submitted, setSubmitted] = useState(emptyS());
@@ -351,36 +234,17 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
-  const [showRoster, setShowRoster] = useState(false);
-  // FIX 1: weekId stored in state, loaded from Supabase settings table
-  const [weekId, setWeekId] = useState(null);
   const admin = isAdmin();
+  const week = useMemo(getWeekLabel, []);
+  const weekId = useMemo(getWeekId, []);
   const today = useMemo(todayIdx, []);
 
-  const week = weekId ? getWeekLabelFromId(weekId) : '';
+  useEffect(() => { loadData(); const iv = setInterval(loadData, 60000); return () => clearInterval(iv); }, []);
 
-  useEffect(() => { initWeek(); }, []);
-
-  // FIX 1: Load or create the active week from a settings table
-  const initWeek = async () => {
-    const { data } = await supabase.from('settings').select('value').eq('key', 'active_week_id').maybeSingle();
-    let id;
-    if (data?.value) {
-      id = data.value;
-    } else {
-      id = getMondayId();
-      await supabase.from('settings').upsert({ key: 'active_week_id', value: id }, { onConflict: 'key' });
-    }
-    setWeekId(id);
-    await loadData(id);
-  };
-
-  const loadData = async (wId) => {
-    const id = wId || weekId;
-    if (!id) return;
+  const loadData = async () => {
     const { data: pd } = await supabase.from('players').select('*').order('rank_order').order('name');
-    const { data: td } = await supabase.from('weekly_totals').select('*').eq('week_id', id);
-    const { data: sd } = await supabase.from('submissions').select('*').eq('week_id', id).maybeSingle();
+    const { data: td } = await supabase.from('weekly_totals').select('*').eq('week_id', weekId);
+    const { data: sd } = await supabase.from('submissions').select('*').eq('week_id', weekId).maybeSingle();
     const tm = {};
     (td || []).forEach(t => { tm[t.player_id] = { Wood: t.wood, Stone: t.stone, Iron: t.iron, Food: t.food, Silver: t.silver }; });
     setPlayers((pd || []).map(p => ({ id: p.id, name: p.name, rank: p.rank, totals: tm[p.id] || emptyT() })));
@@ -389,7 +253,7 @@ function App() {
   };
 
   const toggleSubmit = async (day, res) => {
-    if (!admin || !weekId) return;
+    if (!admin) return;
     const next = { ...submitted, [day]: { ...submitted[day], [res]: !submitted[day]?.[res] } };
     setSubmitted(next);
     await supabase.from('submissions').upsert({ week_id: weekId, data: next }, { onConflict: 'week_id' });
@@ -400,15 +264,6 @@ function App() {
     worst: Math.min(...RES.map(r => p.totals[r] || 0)),
     total: RES.reduce((sum, r) => sum + (p.totals[r] || 0), 0),
   })), [players]);
-
-  const getStatus = t => {
-    const vals = RES.map(r => t[r] || 0);
-    if (vals.every(v => v >= TARGET)) return 'Done';
-    const w = Math.min(...vals);
-    if (w >= HALF) return 'On Track';
-    if (w > 0) return 'Slow';
-    return 'Behind';
-  };
 
   const filtered = useMemo(() => {
     let list = filter === 'All' ? [...processed] : processed.filter(p => p.status === filter);
@@ -445,19 +300,16 @@ function App() {
     await loadData();
   };
 
-  // FIX 1: Reset now creates a NEW week ID instead of deleting current week data
   const resetWeek = async () => {
+    if (!window.confirm('Reset week? This cannot be undone.')) return;
     setSaving(true);
-    const newId = getMondayId();
-    await supabase.from('settings').upsert({ key: 'active_week_id', value: newId }, { onConflict: 'key' });
-    setWeekId(newId);
-    setSubmitted(emptyS());
-    await loadData(newId);
-    setSaving(false);
-    closeModal();
+    await supabase.from('weekly_totals').delete().eq('week_id', weekId);
+    await supabase.from('submissions').delete().eq('week_id', weekId);
+    setSubmitted(emptyS()); await loadData(); setSaving(false); closeModal();
   };
 
   const [reportType, setReportType] = useState('full');
+
   const report = useMemo(() => {
     const totalFor = p => RES.reduce((s, r) => s + (p.totals[r] || 0), 0);
     if (reportType === 'zero') {
@@ -494,7 +346,6 @@ function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#1a1b22', color: '#f5f0e8', fontFamily: "'Courier New',monospace", fontSize: 13, paddingBottom: 40 }}>
-
       <div style={{ background: 'linear-gradient(180deg,#1a1200,#1a1b22)', borderBottom: '1px solid #e8a02028', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: '#e8a020' }}>⚔ RSS Tracker {admin && <span style={{ fontSize: 10, color: '#ef4444' }}>ADMIN</span>}</div>
@@ -546,20 +397,18 @@ function App() {
         {['All', 'Done', 'On Track', 'Slow', 'Behind'].map(f => (
           <button key={f} onClick={() => setFilter(f)} style={btn(filter === f ? 'active' : 'default')}>{f}</button>
         ))}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           <button onClick={() => setSort(s => s === 'rank' ? 'most' : s === 'most' ? 'least' : 'rank')} style={btn()}>Sort: {sort === 'rank' ? 'Rank' : sort === 'most' ? 'Most' : 'Least'}</button>
-          {admin && <button onClick={() => { setShowScanner(s => !s); setShowRoster(false); }} style={btn(showScanner ? 'active' : 'default')}>📷 Scan</button>}
-          {admin && <button onClick={() => { setShowRoster(s => !s); setShowScanner(false); }} style={btn(showRoster ? 'active' : 'default')}>👥 Roster</button>}
+          {admin && <button onClick={() => setShowScanner(s => !s)} style={btn(showScanner ? 'active' : 'default')}>📷 Scan</button>}
           {admin && <button onClick={() => setModal('add')} style={btn()}>+ Player</button>}
           {admin && <button onClick={() => setModal('report')} style={btn()}>Report</button>}
           {admin && <button onClick={() => setModal('reset')} style={btn('danger')}>Reset Week</button>}
         </div>
       </div>
 
-      {admin && (showScanner || showRoster) && (
+      {admin && showScanner && (
         <div style={{ padding: '12px 18px 0' }}>
-          {showScanner && <Scanner players={players} weekId={weekId} onComplete={() => { setShowScanner(false); loadData(); }} />}
-          {showRoster && <RosterSync players={players} onComplete={() => { setShowRoster(false); loadData(); }} />}
+          <Scanner players={players} weekId={weekId} onComplete={() => { setShowScanner(false); loadData(); }} />
         </div>
       )}
 
@@ -604,7 +453,6 @@ function App() {
       {modal && (
         <div onClick={closeModal} style={{ position: 'fixed', inset: 0, background: '#000d', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: '#1e1f28', border: `1px solid ${modal === 'reset' ? '#991b1b' : '#e8a02040'}`, borderRadius: 6, padding: 26, width: 'min(380px,92vw)', maxHeight: '90vh', overflowY: 'auto' }}>
-
             {modal === 'add' && <>
               <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 16, fontWeight: 700 }}>Add Player</div>
               <div style={{ fontSize: 9, color: '#c8a855', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4 }}>Name</div>
@@ -618,7 +466,6 @@ function App() {
                 <button onClick={addPlayer} disabled={saving} style={btn('primary')}>{saving ? 'Adding...' : 'Add'}</button>
               </div>
             </>}
-
             {modal === 'edit' && editPlayer && <>
               <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 6, fontWeight: 700 }}>Edit — {editPlayer.name}</div>
               <div style={{ fontSize: 9, color: '#c8a850', letterSpacing: '.06em', marginBottom: 14 }}>RUNNING WEEKLY TOTALS</div>
@@ -633,7 +480,6 @@ function App() {
                 <button onClick={saveEdit} disabled={saving} style={btn('primary')}>{saving ? 'Saving...' : 'Save'}</button>
               </div>
             </>}
-
             {modal === 'report' && <>
               <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#e8a020', marginBottom: 12, fontWeight: 700 }}>Reports</div>
               <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -647,13 +493,12 @@ function App() {
                 <button onClick={copyReport} style={btn('primary')}>{copied ? 'Copied!' : 'Copy'}</button>
               </div>
             </>}
-
             {modal === 'reset' && <>
               <div style={{ fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#ef4444', marginBottom: 14, fontWeight: 700 }}>Reset Week?</div>
-              <p style={{ fontSize: 12, color: '#d4b878', lineHeight: 1.6, marginBottom: 18 }}>This starts a new week. Previous week data is kept in Supabase — it will not be deleted.</p>
+              <p style={{ fontSize: 12, color: '#d4b878', lineHeight: 1.6, marginBottom: 18 }}>Clears all RSS totals and submission tracking. Cannot be undone.</p>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button onClick={closeModal} style={btn()}>Cancel</button>
-                <button onClick={resetWeek} disabled={saving} style={btn('danger')}>{saving ? 'Resetting...' : 'Start New Week'}</button>
+                <button onClick={resetWeek} disabled={saving} style={btn('danger')}>{saving ? 'Resetting...' : 'Confirm Reset'}</button>
               </div>
             </>}
           </div>
