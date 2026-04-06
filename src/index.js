@@ -320,8 +320,10 @@ function RosterSync({ players, onComplete }) {
         if (might > 0) await supabase.from('players').update({ might }).eq('id', p.id);
       }
     }
+    // Pass back IDs of players not seen (minus those being removed)
+    const flagged = new Set(missingPlayers.filter(p => !toRemove.has(p.id)).map(p => p.id));
     setApplying(false);
-    onComplete();
+    onComplete(flagged);
   };
 
   const b = (v = 'default', dis) => ({ borderRadius: 3, padding: '6px 14px', fontSize: 10, fontFamily: 'inherit', letterSpacing: '.08em', cursor: dis ? 'not-allowed' : 'pointer', textTransform: 'uppercase', border: '1px solid', opacity: dis ? 0.5 : 1, ...(v === 'primary' ? { background: '#e8a020', color: '#0d0e10', borderColor: '#e8a020', fontWeight: 700 } : v === 'danger' ? { background: '#2a0a0a', color: '#f87171', borderColor: '#7f1d1d' } : { background: '#24252f', color: '#d4b870', borderColor: '#484858' }) });
@@ -408,6 +410,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
   const [showRoster, setShowRoster] = useState(false);
+  const [flaggedIds, setFlaggedIds] = useState(new Set());
   const admin = isAdmin();
   const week = useMemo(getWeekLabel, []);
   const weekId = useMemo(getWeekId, []);
@@ -590,7 +593,7 @@ function App() {
 
       {admin && showRoster && (
         <div style={{ padding: '12px 18px 0' }}>
-          <RosterSync players={players} onComplete={() => { setShowRoster(false); loadData(); }} />
+          <RosterSync players={players} onComplete={(flagged) => { setShowRoster(false); if (flagged) setFlaggedIds(flagged); loadData(); }} />
         </div>
       )}
 
@@ -608,14 +611,19 @@ function App() {
           <tbody>
             {filtered.map((p, i) => {
               const isNew = p.rank === 'Soldier' && p.totals && Object.values(p.totals).every(v => v === 0);
+              const isFlagged = flaggedIds.has(p.id);
               return (
-              <tr key={p.id} style={{ background: isNew ? '#2a1a00' : i % 2 === 0 ? '#1a1b22' : '#22232c', borderBottom: '1px solid #20212a', borderLeft: isNew ? '3px solid #e8a020' : 'none' }}>
+              <tr key={p.id} style={{ background: isFlagged ? '#2a0d0d' : isNew ? '#2a1a00' : i % 2 === 0 ? '#1a1b22' : '#22232c', borderBottom: '1px solid #20212a', borderLeft: isFlagged ? '3px solid #ef4444' : isNew ? '3px solid #e8a020' : 'none' }}>
                 <td style={{ padding: '5px 0 5px 8px' }}><div style={{ width: 3, height: 30, borderRadius: 2, background: RANK_COL[p.rank], opacity: .85 }} /></td>
                 <td style={{ padding: '5px 8px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {admin && <span onClick={() => openEdit(p)} style={{ fontSize: 9, color: isNew ? '#e8a020' : '#c8a855', cursor: 'pointer', letterSpacing: '.06em', textTransform: 'uppercase', flexShrink: 0 }} onMouseOver={e => e.target.style.color = '#e8a020'} onMouseOut={e => e.target.style.color = isNew ? '#e8a020' : '#c8a855'}>Edit</span>}
+                    {admin && <span onClick={() => openEdit(p)} style={{ fontSize: 9, color: isFlagged ? '#f87171' : isNew ? '#e8a020' : '#c8a855', cursor: 'pointer', letterSpacing: '.06em', textTransform: 'uppercase', flexShrink: 0 }} onMouseOver={e => e.target.style.color = '#e8a020'} onMouseOut={e => e.target.style.color = isFlagged ? '#f87171' : isNew ? '#e8a020' : '#c8a855'}>Edit</span>}
                     <div>
-                      <div style={{ fontSize: 12, color: isNew ? '#e8a020' : '#f5f0e8' }}>{p.name} {isNew && <span style={{ fontSize: 9, color: '#e8a020', background: '#e8a02020', border: '1px solid #e8a02040', borderRadius: 2, padding: '1px 5px', marginLeft: 4 }}>NEW</span>}</div>
+                      <div style={{ fontSize: 12, color: isFlagged ? '#f87171' : isNew ? '#e8a020' : '#f5f0e8', fontWeight: isFlagged ? 700 : 400 }}>
+                        {p.name}
+                        {isFlagged && <span style={{ fontSize: 9, color: '#f87171', background: '#ef444420', border: '1px solid #ef444440', borderRadius: 2, padding: '1px 5px', marginLeft: 6 }}>NOT IN ROSTER</span>}
+                        {isNew && !isFlagged && <span style={{ fontSize: 9, color: '#e8a020', background: '#e8a02020', border: '1px solid #e8a02040', borderRadius: 2, padding: '1px 5px', marginLeft: 4 }}>NEW</span>}
+                      </div>
                       <div style={{ fontSize: 9, color: RANK_COL[p.rank], letterSpacing: '.08em', textTransform: 'uppercase', marginTop: 1 }}>{p.rank}</div>
                     </div>
                   </div>
@@ -628,8 +636,12 @@ function App() {
                 </td>
                 {RES.map(r => <td key={r} style={{ textAlign: 'right', padding: '5px 8px', fontVariantNumeric: 'tabular-nums', color: resCol(p.totals[r] || 0), fontWeight: (p.totals[r] || 0) >= TARGET ? 600 : 400, fontSize: 12 }}>{fmt(p.totals[r] || 0)}</td>)}
                 {admin && (
-                  <td style={{ padding: '5px 8px', textAlign: 'right' }}>
-                    <span onClick={() => removePlayer(p.id)} style={{ fontSize: 9, color: '#884444', cursor: 'pointer' }} onMouseOver={e => e.target.style.color = '#ef4444'} onMouseOut={e => e.target.style.color = '#884444'}>✕</span>
+                  <td style={{ padding: '5px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {isFlagged && <>
+                      <span onClick={() => setFlaggedIds(s => { const n = new Set(s); n.delete(p.id); return n; })} style={{ fontSize: 9, color: '#c8a855', cursor: 'pointer', marginRight: 8, letterSpacing: '.06em', textTransform: 'uppercase' }}>Keep</span>
+                      <span onClick={() => removePlayer(p.id)} style={{ fontSize: 9, color: '#ef4444', cursor: 'pointer', fontWeight: 700, marginRight: 8, letterSpacing: '.06em', textTransform: 'uppercase' }}>Remove</span>
+                    </>}
+                    {!isFlagged && <span onClick={() => removePlayer(p.id)} style={{ fontSize: 9, color: '#884444', cursor: 'pointer' }} onMouseOver={e => e.target.style.color = '#ef4444'} onMouseOut={e => e.target.style.color = '#884444'}>✕</span>}
                   </td>
                 )}
               </tr>
