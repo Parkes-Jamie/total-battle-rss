@@ -500,7 +500,7 @@ function App() {
       <div style={{ background: 'linear-gradient(180deg,#1a1200,#1a1b22)', borderBottom: '1px solid #e8a02028', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: '#e8a020' }}>⚔ RSS Tracker {admin && <span style={{ fontSize: 10, color: '#ef4444' }}>ADMIN</span>}</div>
-          <div style={{ fontSize: 9, color: '#c8a850', letterSpacing: '.1em', marginTop: 2 }}>TOTAL BATTLE · CLAN COMMAND</div>
+          <div style={{ fontSize: 9, color: '#c8a850', letterSpacing: '.1em', marginTop: 2 }}>{admin ? 'TOTAL BATTLE · CLAN COMMAND' : 'TSS · THE SILVER SWORDS'}</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {admin && todayDone < RES.length && <div style={{ fontSize: 9, color: '#ef4444', background: '#ef444418', border: '1px solid #ef444430', borderRadius: 3, padding: '3px 8px' }}>{RES.length - todayDone} PENDING TODAY</div>}
