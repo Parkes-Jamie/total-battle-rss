@@ -84,7 +84,7 @@ const askClaude = async (imageData, system, text) => {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514', max_tokens: 3000, system,
+      model: 'claude-sonnet-4-6', max_tokens: 3000, system,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: imageData.mediaType, data: imageData.base64 } },
         { type: 'text', text }
@@ -1065,5 +1065,3 @@ function App() {
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-
-                                                            
