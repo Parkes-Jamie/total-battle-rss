@@ -202,6 +202,16 @@ function Scanner({ players, weekId, onApplied, onComplete }) {
     if (!active.length) return;
     setApplying(true);
     try {
+      // Create any NEW players first (added as pending), then map their real ids
+      const newNames = [...new Set(active.filter(r => typeof r.playerId === 'string' && r.playerId.startsWith('NEW:')).map(r => r.name))];
+      const newIdByName = new Map();
+      if (newNames.length) {
+        const insertRows = newNames.map(name => ({ name, rank: 'Soldier', rank_order: 4, status: 'pending' }));
+        const { data: inserted } = await supabase.from('players').insert(insertRows).select();
+        (inserted || []).forEach(p => newIdByName.set(norm(p.name), p.id));
+      }
+      const resolveId = r => (typeof r.playerId === 'string' && r.playerId.startsWith('NEW:')) ? newIdByName.get(norm(r.name)) : r.playerId;
+
       const { data: existing } = await supabase.from('weekly_totals').select('*').eq('week_id', weekId);
       const exMap = new Map();
       (existing || []).forEach(row => exMap.set(row.player_id, row));
@@ -209,15 +219,17 @@ function Scanner({ players, weekId, onApplied, onComplete }) {
       const updates = new Map();
       const affectedIds = new Set();
       for (const r of active) {
-        affectedIds.add(r.playerId);
-        if (!updates.has(r.playerId)) {
-          const ex = exMap.get(r.playerId);
-          updates.set(r.playerId, {
-            player_id: r.playerId, week_id: weekId,
+        const pid = resolveId(r);
+        if (!pid) continue;
+        affectedIds.add(pid);
+        if (!updates.has(pid)) {
+          const ex = exMap.get(pid);
+          updates.set(pid, {
+            player_id: pid, week_id: weekId,
             wood: ex?.wood || 0, stone: ex?.stone || 0, iron: ex?.iron || 0, food: ex?.food || 0, silver: ex?.silver || 0,
           });
         }
-        updates.get(r.playerId)[r.resource.toLowerCase()] += r.amount;
+        updates.get(pid)[r.resource.toLowerCase()] += r.amount;
       }
 
       const snapshot = {};
@@ -229,7 +241,8 @@ function Scanner({ players, weekId, onApplied, onComplete }) {
 
       [...new Set(rows.map(r => r.hash))].forEach(h => { if (h) addSeenHash(h); });
       const resources = [...new Set(active.map(r => r.resource))];
-      setLastMsg(`Applied — ${resources.join(', ')} — ${updates.size} players updated`);
+      const newNote = newNames.length ? ` · ${newNames.length} new pending` : '';
+      setLastMsg(`Applied — ${resources.join(', ')} — ${updates.size} players updated${newNote}`);
       setRows([]);
       onApplied(resources);
     } catch (e) {
@@ -302,7 +315,7 @@ function Scanner({ players, weekId, onApplied, onComplete }) {
       {rows.length > 0 && (
         <div>
           <div style={{ fontSize: 10, color: '#c8a855', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4 }}>Review before applying</div>
-          {unmatchedCount > 0 && <div style={{ fontSize: 10, color: '#e8a020', marginBottom: 8 }}>{unmatchedCount} name{unmatchedCount > 1 ? 's' : ''} not matched — assign a player or untick to skip</div>}
+          {unmatchedCount > 0 && <div style={{ fontSize: 10, color: '#e8a020', marginBottom: 8 }}>{unmatchedCount} name{unmatchedCount > 1 ? 's' : ''} not matched — assign to a player, tap + New to add as a pending player, or untick to skip</div>}
           {Object.entries(grouped).map(([resource, list]) => (
             <div key={resource} style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 11, color: RES_COL[resource], fontWeight: 700, marginBottom: 4 }}>{RES_ICON[resource]} {resource} — {list.filter(r => r.include).length} rows</div>
@@ -311,11 +324,12 @@ function Scanner({ players, weekId, onApplied, onComplete }) {
                   <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', background: !r.playerId ? '#2a1a00' : r.dup ? '#1a1a2a' : i % 2 === 0 ? '#1a1b22' : '#22232c', opacity: r.include ? 1 : 0.4 }}>
                     <input type="checkbox" checked={r.include} onChange={e => setRow(r.key, { include: e.target.checked })} style={{ accentColor: '#e8a020' }} />
                     {r.playerId
-                      ? <span style={{ fontSize: 11, color: '#f5f0e8', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
-                      : <select value="" onChange={e => { const p = players.find(x => x.id === e.target.value); if (p) setRow(r.key, { playerId: p.id, name: p.name }); }} style={{ flex: 1, minWidth: 0, background: '#1a1b22', border: '1px solid #e8a02060', borderRadius: 3, color: '#e8a020', fontFamily: 'inherit', fontSize: 10, padding: '3px 4px' }}>
-                          <option value="">"{r.name}" — assign player...</option>
+                      ? <span style={{ fontSize: 11, color: r.isNew ? '#22c55e' : '#f5f0e8', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}{r.isNew && <span style={{ fontSize: 8, color: '#22c55e', border: '1px solid #22c55e60', borderRadius: 2, padding: '1px 4px', marginLeft: 4 }}>NEW</span>}</span>
+                      : <><select value="" onChange={e => { const p = players.find(x => x.id === e.target.value); if (p) setRow(r.key, { playerId: p.id, name: p.name }); }} style={{ flex: 1, minWidth: 0, background: '#1a1b22', border: '1px solid #e8a02060', borderRadius: 3, color: '#e8a020', fontFamily: 'inherit', fontSize: 10, padding: '3px 4px' }}>
+                          <option value="">"{r.name}" — assign...</option>
                           {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>}
+                        </select>
+                        <button onClick={() => setRow(r.key, { playerId: 'NEW:' + r.name, isNew: true })} style={{ background: '#1a2a1a', border: '1px solid #22c55e60', color: '#22c55e', borderRadius: 3, fontSize: 8, fontFamily: 'inherit', padding: '3px 6px', cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '.06em', flexShrink: 0 }}>+ New</button></>}
                     <input type="number" value={r.amount} onChange={e => setRow(r.key, { amount: Number(e.target.value) || 0, sanity: (Number(e.target.value) || 0) >= SANITY_LIMIT })}
                       style={{ width: 90, background: '#1a1b22', border: '1px solid #484858', borderRadius: 3, color: '#f5f0e8', fontFamily: 'inherit', fontSize: 11, padding: '3px 6px', textAlign: 'right' }} />
                     {r.dup && <span style={{ fontSize: 8, color: '#a78bfa', border: '1px solid #4c4880', borderRadius: 2, padding: '1px 4px', flexShrink: 0 }}>DUP?</span>}
