@@ -79,12 +79,33 @@ const hashStr = s => {
 const getSeenHashes = () => { try { return JSON.parse(localStorage.getItem('tb_scan_hashes') || '[]'); } catch (e) { return []; } };
 const addSeenHash = h => { try { const a = getSeenHashes(); a.push(h); localStorage.setItem('tb_scan_hashes', JSON.stringify(a.slice(-150))); } catch (e) {} };
 
+const parseJSONLoose = raw => {
+  let s = (raw || '').replace(/```json|```/g, '').trim();
+  // Direct parse first
+  try { return JSON.parse(s); } catch (e) {}
+  // Strip a leading sentence of chatter, then find the first JSON value
+  const firstBrace = s.indexOf('{');
+  const firstBracket = s.indexOf('[');
+  let start = -1;
+  if (firstBrace === -1) start = firstBracket;
+  else if (firstBracket === -1) start = firstBrace;
+  else start = Math.min(firstBrace, firstBracket);
+  if (start === -1) throw new Error('No data found in response');
+  const open = s[start];
+  const close = open === '{' ? '}' : ']';
+  const end = s.lastIndexOf(close);
+  if (end === -1 || end < start) throw new Error('Incomplete data in response');
+  const candidate = s.slice(start, end + 1);
+  return JSON.parse(candidate);
+};
+
 const askClaude = async (imageData, system, text) => {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6', max_tokens: 3000, system,
+      model: 'claude-sonnet-4-6', max_tokens: 3000,
+      system: system + ' CRITICAL: Respond with raw JSON only. No explanation, no preamble, no markdown fences. Your entire response must be valid JSON and nothing else.',
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: imageData.mediaType, data: imageData.base64 } },
         { type: 'text', text }
@@ -93,7 +114,7 @@ const askClaude = async (imageData, system, text) => {
   });
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
-  return JSON.parse((data.content?.[0]?.text || '').replace(/```json|```/g, '').trim());
+  return parseJSONLoose(data.content?.[0]?.text || '');
 };
 
 const splitReport = text => {
